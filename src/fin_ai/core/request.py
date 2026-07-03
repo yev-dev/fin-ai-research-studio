@@ -25,7 +25,7 @@ Usage::
         provider="proxied_github",
         model="openai/gpt-4o",
         http_proxy_port=8080,
-        https_proxy_port=8443,
+    # Proxy ports are handled by the LLM clients directly; no explicit proxy port arguments.
     )
 """
 

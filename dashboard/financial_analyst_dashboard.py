@@ -284,8 +284,7 @@ github_token = os.getenv("GITHUB_TOKEN", "")
 github_endpoint = os.getenv("GITHUB_ENDPOINT", "https://models.github.ai/inference")
 deepseek_token = os.getenv("DEEPSEEK_TOKEN", "")
 deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL)
-http_proxy_port: int | None = None
-https_proxy_port: int | None = None
+# Proxy ports were previously exposed in the UI; they have been removed.
 
 # --- Show required / optional params based on ProviderConfig ---
 if "api_key" in _pcfg.required_params or "api_key" in _pcfg.optional_params:
@@ -302,23 +301,21 @@ if "api_base" in _pcfg.optional_params:
     _default_base = _pcfg.default_base_url
     _current_base = os.getenv("GITHUB_ENDPOINT" if "github" in selected_provider else "DEEPSEEK_BASE_URL", _default_base) if selected_provider != "ollama" else os.getenv("OLLAMA_ENDPOINT", _default_base)
     _base_val = st.sidebar.text_input("API Base URL", value=_current_base, key=f"{selected_provider}_api_base")
-    if selected_provider == "github" or selected_provider == "proxied_github":
+    # The code previously supported proxied providers (proxied_github, proxied_deepseek).
+    # Those are removed.  We only support direct connection for github and
+    # deepseek.
+    if selected_provider == "github":
         github_endpoint = _base_val
-    elif selected_provider == "deepseek" or selected_provider == "proxied_deepseek":
+    elif selected_provider == "deepseek":
         deepseek_base_url = _base_val
 
-# Proxy ports: single-port mode (proxy_port) or split-port mode (http_proxy_port, https_proxy_port)
-_show_proxy = "proxy_port" in _pcfg.optional_params or "http_proxy_port" in _pcfg.optional_params
-if _show_proxy:
-    with st.sidebar.expander("Proxy Settings", expanded=False):
-        if "proxy_port" in _pcfg.optional_params:
-            _default_proxy = os.getenv("PX_PROXY_PORT", "")
-            proxy_port_val = st.text_input("Proxy Port", value=_default_proxy, key=f"{selected_provider}_proxy_port")
-        if "http_proxy_port" in _pcfg.optional_params or "https_proxy_port" in _pcfg.optional_params:
-            _default_http = os.getenv("PX_HTTP_PROXY_PORT", "")
-            _default_https = os.getenv("PX_HTTPS_PROXY_PORT", "")
-            http_proxy_port_val = st.text_input("HTTP Proxy Port", value=_default_http, key=f"{selected_provider}_http_proxy_port")
-            https_proxy_port_val = st.text_input("HTTPS Proxy Port", value=_default_https, key=f"{selected_provider}_https_proxy_port")
+# NOTE: Support for proxy ports and proxied providers is removed. The UI
+# previously exposed proxy settings (single‑port or split HTTP/HTTPS ports) and
+# allowed selection of "proxied_github" and "proxied_deepseek" provider types.
+# Those features are no longer needed once the backend has been refactored to
+# use normal direct providers with optional proxy configuration handled via the
+# request layer.  All related state variables (proxy_port, http_proxy_port,
+# https_proxy_port) and their UI controls have been removed.
 
 # --- Model selection ---
 if selected_provider == "github":
@@ -331,10 +328,7 @@ if selected_provider == "github":
     default_chat_model = os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)
     default_chat_index = display_model_options.index(default_chat_model) if default_chat_model in display_model_options else 0
     selected_model = st.sidebar.selectbox("Select Model", display_model_options, index=default_chat_index, key="github_model")
-elif selected_provider == "proxied_github":
-    display_model_options = [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
-    default_chat_model = os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)
-    selected_model = st.sidebar.text_input("Model", value=default_chat_model, key="proxied_github_model")
+# proxied_github provider has been removed; use direct github provider.
 
 elif selected_provider == "deepseek":
     try:
@@ -350,8 +344,8 @@ elif selected_provider == "deepseek":
     else:
         selected_model = st.sidebar.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="deepseek_model_fallback")
 
-elif selected_provider == "proxied_deepseek":
-    selected_model = st.sidebar.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="proxied_deepseek_model")
+# proxied_deepseek provider has been removed; configuration follows the normal
+# deepseek path.
 
 else:  # ollama
     default_chat_model = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)

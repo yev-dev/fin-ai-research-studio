@@ -46,7 +46,7 @@ with st.sidebar:
         value=True,
         help="When enabled, oversized prompts are clipped before sending to strict-input models like gpt-5.",
     )
-    st.text_input("Proxy Port (optional)", value=os.getenv("PX_PROXY_PORT", ""), key="proxy_port_input")
+    # Proxy port is no longer part of the UI – removed.
 
     # ---- Dynamic params + model listing based on selected provider ----
     _pcfg = known_providers().get(provider)
@@ -56,11 +56,12 @@ with st.sidebar:
         st.text_input("API Key / Token", value=_default_val, type="password", key=f"{provider}_api_key")
 
     if _pcfg and _pcfg.optional_params:
-        _default_endpoint = {"ollama": os.getenv("OLLAMA_ENDPOINT", _pcfg.default_base_url),
-                             "github": os.getenv("GITHUB_ENDPOINT", _pcfg.default_base_url),
-                             "proxied_github": os.getenv("GITHUB_ENDPOINT", _pcfg.default_base_url),
-                             "deepseek": os.getenv("DEEPSEEK_BASE_URL", _pcfg.default_base_url),
-                             "proxied_deepseek": os.getenv("DEEPSEEK_BASE_URL", _pcfg.default_base_url)}.get(provider, _pcfg.default_base_url)
+        # Proxy provider names removed – use direct connection only
+        _default_endpoint = {
+            "ollama": os.getenv("OLLAMA_ENDPOINT", _pcfg.default_base_url),
+            "github": os.getenv("GITHUB_ENDPOINT", _pcfg.default_base_url),
+            "deepseek": os.getenv("DEEPSEEK_BASE_URL", _pcfg.default_base_url),
+        }.get(provider, _pcfg.default_base_url)
         st.text_input("API Base URL", value=_default_endpoint, key=f"{provider}_api_base")
 
     # --- Model selection ---
