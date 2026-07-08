@@ -4,8 +4,9 @@
 Financial Data Analysis — Streamlit presentation layer.
 
 This module contains only Streamlit UI widgets, layout, and rendering.
-All business logic and external system communication are imported from
-``financial_analyst_dashboard.py``.
+All business logic and external system communication are imported directly
+from ``fin_ai.core.processor``, ``fin_ai.core.rag``, ``fin_ai.core.request``,
+``fin_ai.core.providers``, and ``fin_ai.agents.engine_bridge``.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from pathlib import Path
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("LITELLM_DISABLE_COST_MAP", "true")
+os.environ.setdefault("LITELLM_LOG_LEVEL", "ERROR")
 
 import logging
 logging.getLogger("transformers").setLevel(logging.ERROR)
@@ -50,35 +53,34 @@ from dashboard.utils import (
     execute_python_code,
     extract_python_code,
     sanitize_generated_python_code,
+    render_pdf_pages,
+    render_csv_thumbnail,
 )
-from dashboard.financial_analyst_dashboard import (
-    discover_vector_stores,
-    get_local_model_options,
-    get_cached_csv_thumbnail_path,
-    get_cached_pdf_page_paths,
-    get_provider_configuration,
-    get_known_providers,
-    fetch_github_models,
-    fetch_deepseek_models,
-    fetch_github_embedding_models,
-    load_embeddings_for_query,
-    load_vector_stores,
-    filter_stores_by_groups,
-    process_upload,
-    answer_query,
-    run_agent,
-    build_llm_config,
-    load_question_history,
-    save_question_history_entry,
-    clear_question_history,
-    purge_vector_database,
-    get_source_citations,
-    get_agent_library,
-    get_yahoo_finance_tools,
-    get_rag_source_store,
-    filter_sources_by_valid_types,
-    looks_like_embedding_model,
+from fin_ai.core.processor import (
+    SUPPORTED_UPLOAD_TYPES,
+    answer_question,
+    build_query_source_configs,
+    clear_history,
+    discover_source_groups,
+    fetch_models,
+    filter_stores_by_source_groups,
+    get_source_vector_stores,
+    get_vector_db_names,
+    load_history,
+    load_vector_stores_for_query,
+    process_uploaded_document,
+    purge_vector_db,
+    save_history_entry,
+    build_agent_llm_config,
+    run_agent_task,
 )
+from fin_ai.core.providers import list_models
+from fin_ai.core.query import format_source_citations
+from fin_ai.core.rag import load_embedding_metadata, RAGSourceStore, discover_vector_stores_by_source
+from fin_ai.core.request import known_providers, get_provider_config
+from fin_ai.core.embeddings import create_embeddings
+from fin_ai.agents.agent_library import library as agent_library
+from fin_ai.core.tools import YAHOO_FINANCE_TOOLS
 
 st.set_page_config(page_title="Financial Data Analysis", layout="wide")
 SIDEBAR_PREVIEW_WIDTH = 320
@@ -197,7 +199,7 @@ def display_pdf_in_sidebar(pdf_path: str | Path, file_name: str) -> None:
         source_path = Path(pdf_path)
         source_mtime = source_path.stat().st_mtime if source_path.exists() else 0.0
         for page_index, img_path in enumerate(
-            get_cached_pdf_page_paths(str(source_path), str(images_folder), zoom=1.5, source_mtime=source_mtime),
+            render_pdf_pages(str(source_path), str(images_folder), zoom=1.5),
             start=1,
         ):
             st.sidebar.image(str(img_path), caption=f"Page {page_index}", width=SIDEBAR_PREVIEW_WIDTH)
@@ -210,7 +212,7 @@ def display_csv_in_sidebar(csv_path: str | Path, file_name: str) -> None:
         images_folder = Path(VECTOR_DB_DIR) / file_name / "images"
         source_path = Path(csv_path)
         source_mtime = source_path.stat().st_mtime if source_path.exists() else 0.0
-        img = get_cached_csv_thumbnail_path(str(source_path), str(images_folder), source_mtime)
+        img = render_csv_thumbnail(str(source_path), str(images_folder))
         if img:
             st.sidebar.image(img, caption="CSV Preview", width=SIDEBAR_PREVIEW_WIDTH)
         else:
@@ -220,14 +222,24 @@ def display_csv_in_sidebar(csv_path: str | Path, file_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Helper: looks like embedding model
+# ---------------------------------------------------------------------------
+
+def looks_like_embedding_model(model_id: str) -> bool:
+    """Heuristic filter for embedding-capable model identifiers."""
+    mid = (model_id or "").strip().lower()
+    return "embedding" in mid or "embed" in mid
+
+
+# ---------------------------------------------------------------------------
 # -- Page layout
 # ---------------------------------------------------------------------------
 
 st.title("FinAI Research Studio")
 
 # Discover vector stores
-source_vector_stores, vector_db_names = discover_vector_stores()
-available_chat_models, available_embedding_models, model_load_error = get_local_model_options()
+source_vector_stores = get_source_vector_stores()
+vector_db_names = get_vector_db_names(source_vector_stores)
 
 # ---------------------------------------------------------------------------
 # -- Reasoning -----------------------------------------------------------
@@ -240,7 +252,7 @@ st.sidebar.caption(
 )
 
 # Build provider label→key mapping from ProviderConfig
-_all_cfgs = get_known_providers()
+_all_cfgs = known_providers()
 provider_label_to_key = {cfg.label: name for name, cfg in _all_cfgs.items()}
 default_provider = os.getenv("DEFAULT_PROVIDER", "ollama").strip().lower()
 provider_labels = list(provider_label_to_key.keys())
@@ -249,7 +261,7 @@ default_provider_index = next(
 )
 selected_provider_label = st.sidebar.selectbox("Select Provider", provider_labels, index=default_provider_index, key="chat_provider")
 selected_provider = provider_label_to_key[selected_provider_label]
-_pcfg = get_provider_configuration(selected_provider)
+_pcfg = get_provider_config(selected_provider)
 
 # Initialise provider-scoped vars with safe defaults
 github_token = os.getenv("GITHUB_TOKEN", "")
@@ -281,7 +293,7 @@ if "api_base" in _pcfg.optional_params:
 if selected_provider == "github":
     try:
         with st.spinner("Fetching available GitHub models..."):
-            gh_models = fetch_github_models(api_key=github_token)
+            gh_models = fetch_models("github", api_key=github_token)
         display_model_options = [m.id for m in gh_models] or [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
     except Exception:
         display_model_options = [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
@@ -292,7 +304,7 @@ if selected_provider == "github":
 elif selected_provider == "deepseek":
     try:
         with st.spinner("Fetching available DeepSeek models..."):
-            ds_models = fetch_deepseek_models(api_key=deepseek_token)
+            ds_models = fetch_models("deepseek", api_key=deepseek_token)
         deepseek_model_ids = [m.id for m in ds_models]
     except Exception:
         deepseek_model_ids = []
@@ -305,6 +317,10 @@ elif selected_provider == "deepseek":
 
 else:  # ollama
     default_chat_model = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)
+    from dashboard.utils import load_local_model_options
+    available_chat_models, available_embedding_models, model_load_error = load_local_model_options(
+        OLLAMA_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBEDDING_MODEL
+    )
     try:
         default_chat_index = available_chat_models.index(default_chat_model) if default_chat_model in available_chat_models else 0
     except ValueError:
@@ -317,7 +333,7 @@ use_tools = st.sidebar.checkbox("Enable function tools (financial data)", value=
 
 if use_tools:
     with st.sidebar.expander("Available tools", expanded=False):
-        for tool in get_yahoo_finance_tools():
+        for tool in YAHOO_FINANCE_TOOLS:
             if tool.get("type") == "function":
                 fn = tool["function"]
                 st.sidebar.markdown(f"**`{fn['name']}`** — {fn.get('description', '')}")
@@ -343,11 +359,13 @@ selected_emb_provider = embeddings_provider_label_to_key[selected_emb_provider_l
 
 if selected_emb_provider == "github":
     embedding_github_token = st.sidebar.text_input("GitHub Token (Embeddings)", value=os.getenv("GITHUB_TOKEN", ""), type="password", key="embedding_github_token")
-    embedding_model_ids = fetch_github_embedding_models(api_key=embedding_github_token)
+    try:
+        emb_models = fetch_models("github", api_key=embedding_github_token)
+        embedding_model_ids = [m.id for m in emb_models if looks_like_embedding_model(m.id)]
+    except Exception:
+        embedding_model_ids = []
     available_embedding_models_display = embedding_model_ids if embedding_model_ids else [DEFAULT_GITHUB_EMBEDDING_MODEL, "openai/text-embedding-3-large"]
-    if embedding_model_ids:
-        pass  # models fetched successfully
-    else:
+    if not embedding_model_ids:
         st.sidebar.warning(
             "Using safe defaults to avoid 400 errors from /embeddings."
         )
@@ -365,7 +383,7 @@ st.sidebar.divider()
 
 # -- Previous Questions -----------------------------------------------------
 if vector_db_names:
-    history, _history_db_name = load_question_history(vector_db_names)
+    history, _history_db_name = load_history(vector_db_names[0]), vector_db_names[0]
     st.session_state["question_history"] = history
     st.session_state["history_vector_db"] = _history_db_name
 
@@ -375,7 +393,7 @@ if vector_db_names:
             st.sidebar.caption("No saved question history yet.")
         else:
             if st.sidebar.button("Clear History", key=f"clear_history_{_history_db_name}"):
-                clear_question_history(_history_db_name)
+                clear_history(_history_db_name)
                 st.session_state["question_history"] = []
                 st.rerun()
             for idx, item in enumerate(history[:10], start=1):
@@ -393,24 +411,28 @@ if vector_db_names:
 
     # -- Maintenance ---------------------------------------------------------
     with st.sidebar.expander("Maintenance", expanded=False):
-        rag_store, on_disk_stores = get_rag_source_store()
+        rag_store = RAGSourceStore()
+        on_disk_stores = list(discover_vector_stores_by_source(VECTOR_DB_DIR).keys())
 
         st.sidebar.caption("Registered RAG Sources")
         df_sources = rag_store.to_dataframe()
         if not df_sources.empty and on_disk_stores:
             # Only show sources with valid source types (pdf, csv, json, html, url, etc.)
-            df_on_disk = filter_sources_by_valid_types(df_sources, on_disk_stores)
+            valid_types = set(SUPPORTED_UPLOAD_TYPES)
+            df_on_disk = df_sources[df_sources["name"].isin(on_disk_stores)].copy()
             if not df_on_disk.empty:
-                st.sidebar.dataframe(
-                    df_on_disk[["name", "source_type", "chunk_count", "embedding_model"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                total = len(df_on_disk)
-                total_chunks = df_on_disk["chunk_count"].sum()
-                st.sidebar.caption(f"{total} FAISS index(es) · {int(total_chunks):,} chunk(s)")
-            else:
-                st.sidebar.caption("No FAISS index found for registered sources.")
+                df_filtered = df_on_disk[df_on_disk["source_type"].isin(valid_types)]
+                if not df_filtered.empty:
+                    st.sidebar.dataframe(
+                        df_filtered[["name", "source_type", "chunk_count", "embedding_model"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    total = len(df_filtered)
+                    total_chunks = df_filtered["chunk_count"].sum()
+                    st.sidebar.caption(f"{total} FAISS index(es) · {int(total_chunks):,} chunk(s)")
+                else:
+                    st.sidebar.caption("No FAISS index found for registered sources.")
         elif on_disk_stores and df_sources.empty:
             st.sidebar.caption(f"{len(on_disk_stores)} FAISS index(es) found — sync to register.")
         else:
@@ -432,7 +454,7 @@ if vector_db_names:
         _purge_db = st.sidebar.selectbox("Select DB to purge", vector_db_names, key="purge_db_select")
         confirm_purge = st.sidebar.checkbox(f"Confirm purge of '{_purge_db}'", key="confirm_purge_main")
         if st.sidebar.button("Purge Vector DB", type="secondary", disabled=not confirm_purge, key="purge_db_btn"):
-            deleted = purge_vector_database(_purge_db)
+            deleted = purge_vector_db(_purge_db)
             if deleted:
                 st.session_state["question_history"] = []
                 st.session_state.pop("latest_response", None)
@@ -449,8 +471,6 @@ agent_rag_query = ""
 selected_agent = ""
 agent_format = "html"
 agent_email = ""
-
-agent_library = get_agent_library()
 
 st.subheader("Agent Workflows")
 st.caption(
@@ -521,21 +541,42 @@ loaded_stores: dict = {}
 # Load embeddings and vector stores for RAG querying
 embeddings = None
 if vector_db_names:
-    embeddings = load_embeddings_for_query(
-        vector_db_names,
-        selected_emb_provider,
-        selected_embedding_model,
-        embeddings_base_url,
-        embedding_github_token if selected_emb_provider == "github" else None,
-    )
+    _github_token = os.environ.get("GITHUB_TOKEN", "")
+    if selected_emb_provider == "github":
+        try:
+            _github_token = embedding_github_token or _github_token
+        except NameError:
+            pass
+    try:
+        saved_emb_meta = load_embedding_metadata(vector_db_names[0])
+        if saved_emb_meta:
+            embeddings = create_embeddings(
+                provider=saved_emb_meta["provider"],
+                model=saved_emb_meta["model"],
+                api_base=saved_emb_meta["base_url"],
+                api_key=_github_token if saved_emb_meta["provider"] == "github" else None,
+            )
+        else:
+            embeddings = create_embeddings(
+                provider=selected_emb_provider,
+                model=selected_embedding_model,
+                api_base=embeddings_base_url,
+                api_key=_github_token if selected_emb_provider == "github" else None,
+            )
+    except Exception:
+        embeddings = None
 
     if embeddings is None:
         st.sidebar.error("No embeddings available — check the sidebar for errors.")
     else:
         try:
-            loaded_stores, query_source_configs, available_source_names, available_source_groups = load_vector_stores(
+            loaded_stores = load_vector_stores_for_query(
                 selected_query_vector_dbs, source_vector_stores, embeddings
             )
+            query_source_configs = build_query_source_configs(loaded_stores, group_by="vector_db")
+            available_source_names = [c.name for c in query_source_configs]
+            source_groups_map = discover_source_groups(loaded_stores)
+            available_source_groups = sorted(source_groups_map.keys())
         except (ValueError, RuntimeError) as e:
             st.sidebar.error(str(e))
             loaded_stores = {}
@@ -547,7 +588,6 @@ st.subheader("RAG Query")
 
 # Upload document inline (always visible — even when vector_db is empty)
 with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
-    from fin_ai.core.processor import SUPPORTED_UPLOAD_TYPES
     selected_source_type = st.selectbox("Type of Source Document", SUPPORTED_UPLOAD_TYPES, index=0, key="source_type_rag")
     uploaded_file = st.file_uploader("Upload a document for analysis", type=SUPPORTED_UPLOAD_TYPES, key="upload_rag")
     if uploaded_file:
@@ -560,7 +600,7 @@ with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
                         _gh_tok = embedding_github_token or _gh_tok
                     except NameError:
                         pass
-                result_upload = process_upload(
+                result_upload = process_uploaded_document(
                     file_binary=binary,
                     file_name=uploaded_file.name,
                     embedding_model=selected_embedding_model,
@@ -590,7 +630,7 @@ if vector_db_names:
             help="Select document type(s) to search within.",
         )
         # Filter available documents to only those in selected groups
-        group_filtered_stores = filter_stores_by_groups(loaded_stores, selected_source_groups)
+        group_filtered_stores = filter_stores_by_source_groups(loaded_stores, selected_source_groups)
         filtered_doc_names = sorted(group_filtered_stores.keys())
     else:
         selected_source_groups = []
@@ -625,10 +665,12 @@ if vector_db_names:
                 st.error("The selected documents are not available. Please re-select.")
             else:
                 with st.spinner("Answering your question..."):
-                    result = answer_query(
+                    result = answer_question(
                         question,
                         active_configs,
                         provider=selected_provider,
+                        system_prompt="You are a concise financial analysis assistant.",
+                        temperature=0.2,
                         retrieval_mode=retrieval_mode,
                         auto_truncate_prompt=bool(auto_truncate_prompt),
                         use_tools=use_tools,
@@ -651,7 +693,7 @@ if vector_db_names:
                         st.session_state["latest_retrieval"] = _llm_result.retrieval
 
                     _history_db = selected_query_vector_dbs[0] if selected_query_vector_dbs else "default"
-                    save_question_history_entry(_history_db, {
+                    save_history_entry(_history_db, {
                         "question": question,
                         "answer": llm_response,
                         "vector_db": _history_db,
@@ -661,7 +703,7 @@ if vector_db_names:
                         "response_type": response_type,
                         "answer_seconds": result["elapsed"],
                     })
-                    st.session_state["question_history"] = load_question_history(vector_db_names)[0]
+                    st.session_state["question_history"] = load_history(vector_db_names[0])
 
 # ---------------------------------------------------------------------------
 # -- Agent execution & display ---------------------------------------------
@@ -671,7 +713,7 @@ if agent_submit and agent_rag_query.strip():
     with st.spinner(f"Running {selected_agent} agent..."):
         _effective_gh_token = github_token if selected_provider == "github" else ""
         _effective_ds_token = deepseek_token if selected_provider == "deepseek" else ""
-        agent_llm_config = build_llm_config(
+        agent_llm_config = build_agent_llm_config(
             provider=selected_provider,
             model=selected_model,
             ollama_base_url=OLLAMA_BASE_URL,
@@ -680,7 +722,7 @@ if agent_submit and agent_rag_query.strip():
             deepseek_base_url=deepseek_base_url,
             deepseek_token=_effective_ds_token,
         )
-        result = run_agent(
+        result = run_agent_task(
             agent_name=selected_agent,
             prompt=agent_rag_query.strip(),
             llm_config=agent_llm_config,
@@ -712,7 +754,7 @@ with st.expander("Communication Output", expanded=True):
             render_response_output(latest_response["answer"], latest_response.get("response_type", "Markdown"), panel_key="latest_response")
             _retrieval = st.session_state.get("latest_retrieval")
             if _retrieval:
-                citations = get_source_citations(_retrieval, response_type=latest_response.get("response_type", "Markdown"))
+                citations = format_source_citations(_retrieval, response_type=latest_response.get("response_type", "Markdown"))
                 if citations:
                     render_source_citations(citations, latest_response.get("response_type", "Markdown"))
         else:

@@ -52,7 +52,7 @@ from fin_ai.core.tools import (
     extract_tool_calls,
     build_tool_aware_system_prompt,
 )
-from dashboard.utils import (
+from fin_ai.core.history import (
     append_question_history,
     load_question_history,
     purge_vector_db_assets,
@@ -285,7 +285,9 @@ def discover_source_groups(
             except Exception:
                 groups.setdefault("unknown", []).append(store_name)
 
-    return groups
+    # Exclude fallback groups that don't represent valid source types
+    unknown_groups = {"unknown"}
+    return {k: v for k, v in groups.items() if k not in unknown_groups}
 
 
 def filter_stores_by_source_groups(
@@ -335,6 +337,14 @@ def answer_question(
     )
 
     llm_response = llm_result.response
+
+    # Diagnostic: flag silent LLM failures
+    if llm_response is None:
+        logger.warning(
+            "LLM returned no response for query — retrieval had %d sources, mode=%s",
+            len(llm_result.source_results),
+            llm_result.retrieval.mode,
+        )
 
     if use_tools and llm_response is not None:
         first_message = llm_response.get_metadata().raw_response.choices[0].message
@@ -416,6 +426,9 @@ def build_agent_llm_config(
         }
     else:
         base = ollama_base_url or OLLAMA_BASE_URL
+        base = base.rstrip("/")
+        if not base.endswith("/v1"):
+            base += "/v1"
         return {
             "config_list": [
                 {"model": model, "base_url": base, "api_key": "ollama"}
@@ -597,8 +610,8 @@ def save_history_entry(vector_db_name: str, entry: dict[str, Any]) -> None:
 
 
 def clear_history(vector_db_name: str) -> None:
-    from dashboard.utils import clear_question_history as _clear
-    _clear(vector_db_name, QUESTION_HISTORY_DIR)
+    from fin_ai.core.history import clear_question_history
+    clear_question_history(vector_db_name, QUESTION_HISTORY_DIR)
 
 
 def purge_vector_db(vector_db_name: str) -> list[Path]:

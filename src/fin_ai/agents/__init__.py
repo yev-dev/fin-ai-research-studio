@@ -35,5 +35,8 @@ from .engine_bridge import (
     publish_research_pdf,
     publish_research_report,
     send_research_email,
+    list_published_research,
+    read_published_research,
+    summarise_published_research,
     ENGINE_BRIDGE_TOOLS,
 )

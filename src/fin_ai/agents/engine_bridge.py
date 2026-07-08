@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,7 @@ class _EngineState:
     source_configs: list = field(default_factory=list)
     loaded_stores: dict[str, Any] = field(default_factory=dict)
     chat_provider: str = "ollama"
+    llm_config: dict[str, Any] = field(default_factory=dict)
     initialised: bool = False
     _last_retrieval: MultiSourceQueryResult | None = None
     _last_prompt_result: MultiSourcePromptResult | None = None
@@ -217,7 +219,7 @@ def query_local_rag(
     if not _state.source_configs:
         return (
             "[Local RAG] No vector stores available.  Upload documents via the "
-            "Streamlit dashboard first: streamlit run dashboard/financial_analyst_dashboard.py"
+            "Streamlit dashboard first: streamlit run dashboard/financial_analyst_app.py"
         )
 
     from fin_ai.core.processor import answer_question
@@ -333,7 +335,7 @@ def list_vector_stores() -> str:
     if not _state.available_dbs:
         return (
             "No vector stores found.  Upload documents via the "
-            "Streamlit dashboard: streamlit run dashboard/financial_analyst_dashboard.py"
+            "Streamlit dashboard: streamlit run dashboard/financial_analyst_app.py"
         )
 
     lines = [f"Local vector stores ({len(_state.available_dbs)} available):"]
@@ -503,6 +505,294 @@ from fin_ai.core.tools import (  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
+# Published Research tools
+# ---------------------------------------------------------------------------
+
+
+def list_published_research(detail: str = "summary") -> str:
+    """List all published research reports in the output directory.
+
+    Returns a summary of each report (filename, title, date, size) or
+    a full listing depending on the detail parameter.
+
+    Parameters
+    ----------
+    detail : str
+        ``"summary"`` (default) — compact listing with title and date.
+        ``"full"`` — includes file size and full path.
+    """
+    from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR
+    from datetime import datetime as _dt
+
+    output_dir = _Path(PUBLISHED_RESEARCH_DIR)
+    if not output_dir.exists():
+        return "[Published Research] Output directory does not exist."
+
+    files = sorted(output_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return "[Published Research] No published research reports found."
+
+    lines = [f"Published Research Reports ({len(files)} total):\n"]
+    for f in files:
+        if f.suffix not in (".html", ".pdf"):
+            continue
+        size_kb = f.stat().st_size / 1024
+        mtime = _dt.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        # Infer title from filename (strip timestamp suffix)
+        stem = f.stem
+        # Remove trailing timestamp like _20250707_215530
+        import re as _re
+        title = _re.sub(r"_\d{8}_\d{6}$", "", stem).replace("_", " ").strip()
+        title = title or stem
+
+        if detail == "full":
+            lines.append(f"  • {title}")
+            lines.append(f"      File: {f.name}")
+            lines.append(f"      Path: {f}")
+            lines.append(f"      Size: {size_kb:.1f} KB")
+            lines.append(f"      Date: {mtime}")
+            lines.append("")
+        else:
+            lines.append(f"  • {title}  ({mtime}, {size_kb:.1f} KB) — {f.name}")
+
+    return "\n".join(lines)
+
+
+def read_published_research(filename: str) -> str:
+    """Read and return the content of a published research report.
+
+    Extracts the visible text content from an HTML report, stripping
+    HTML tags and presenting a clean text version.
+
+    Parameters
+    ----------
+    filename : str
+        Name of the file in the published_research/ directory
+        (e.g. ``"NVIDIA_Analysis_20250707_215530.html"``).
+        Partial names are matched by prefix (first match wins).
+    """
+    from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR
+    from html.parser import HTMLParser
+
+    output_dir = _Path(PUBLISHED_RESEARCH_DIR)
+    if not output_dir.exists():
+        return "[Published Research] Output directory does not exist."
+
+    # Try exact match first, then prefix match
+    target: _Path | None = None
+    for f in output_dir.iterdir():
+        if f.name == filename:
+            target = f
+            break
+    if target is None:
+        for f in output_dir.iterdir():
+            if f.name.startswith(filename):
+                target = f
+                break
+
+    if target is None:
+        # List available files
+        available = [
+            f.name for f in output_dir.iterdir()
+            if f.suffix in (".html", ".pdf")
+        ]
+        avail_str = "\n".join(f"  • {a}" for a in available) if available else "  (none)"
+        return (
+            f"[Published Research] File '{filename}' not found.\n"
+            f"Available files:\n{avail_str}\n\n"
+            f"Hint: use list_published_research() to see available reports."
+        )
+
+    if target.suffix == ".pdf":
+        return (
+            f"[Published Research] '{target.name}' is a PDF. "
+            f"Open it directly at: {target}"
+        )
+
+    # Parse HTML to extract text content
+    class _TextExtractor(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._text: list[str] = []
+            self._skip = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style"):
+                self._skip = True
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style"):
+                self._skip = False
+            if tag in ("p", "h1", "h2", "h3", "h4", "li", "tr", "div"):
+                self._text.append("\n")
+
+        def handle_data(self, data):
+            if not self._skip:
+                stripped = data.strip()
+                if stripped:
+                    self._text.append(stripped + " ")
+
+        def get_text(self) -> str:
+            import re as _re
+            result = "".join(self._text)
+            # Collapse multiple newlines
+            result = _re.sub(r"\n{3,}", "\n\n", result)
+            return result.strip()
+
+    html_content = target.read_text(encoding="utf-8")
+    extractor = _TextExtractor()
+    extractor.feed(html_content)
+    text_content = extractor.get_text()
+
+    # Truncate to avoid overwhelming the LLM context
+    max_chars = 15000
+    if len(text_content) > max_chars:
+        text_content = text_content[:max_chars] + (
+            f"\n\n[... truncated at {max_chars} characters. "
+            f"Full file: {target}]"
+        )
+
+    header = (
+        f"=== Published Research: {target.stem} ===\n"
+        f"File: {target.name}\n"
+        f"Size: {target.stat().st_size / 1024:.1f} KB\n"
+        f"{'=' * 60}\n\n"
+    )
+    return header + text_content
+
+
+# ---------------------------------------------------------------------------
+# Summarise published research — agentic bridge to Research_Publication_Summariser
+# ---------------------------------------------------------------------------
+
+
+def summarise_published_research(
+    filename: str,
+    summary_title: str = "",
+) -> str:
+    """Read a published research report, summarise it, and save the summary
+    as a new file with the same name (prefixed with 'Summary_of_') in the
+    published_research/ directory.
+
+    This function:
+    1. Reads the content of the specified published research file
+    2. Generates a concise structured summary using the LLM
+    3. Saves the summary as an HTML file alongside the original
+
+    Parameters
+    ----------
+    filename : str
+        Name of the published research file to summarise
+        (e.g. ``"NVDA_Analysis_20250707_215530.html"``).
+        Partial names are matched by prefix.
+    summary_title : str
+        Optional title override for the summary.  Defaults to
+        ``"Summary of <original_title>"``.
+    """
+    from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR
+
+    output_dir = _Path(PUBLISHED_RESEARCH_DIR)
+    if not output_dir.exists():
+        return json.dumps({
+            "status": "error",
+            "error": "Published research directory does not exist.",
+        })
+
+    # 1. Read the original report
+    original_text = read_published_research(filename)
+    if original_text.startswith("[Published Research]"):
+        return json.dumps({
+            "status": "error",
+            "error": original_text,
+        })
+
+    # Extract a safe filename base from the original filename
+    target: _Path | None = None
+    for f in output_dir.iterdir():
+        if f.name == filename:
+            target = f
+            break
+    if target is None:
+        for f in output_dir.iterdir():
+            if f.name.startswith(filename):
+                target = f
+                break
+
+    if target is None:
+        return json.dumps({
+            "status": "error",
+            "error": f"Could not resolve file for '{filename}'.",
+        })
+
+    base_stem = target.stem
+    # Remove trailing timestamp like _20250707_215530 for the title
+    import re as _re
+    clean_title = _re.sub(r"_\d{8}_\d{6}$", "", base_stem).replace("_", " ").strip()
+    clean_title = clean_title or base_stem
+
+    effective_title = summary_title or f"Summary of {clean_title}"
+
+    # 2. Generate summary via LLM
+    _ensure_initialised()
+
+    from fin_ai.core.processor import answer_question
+
+    summarise_prompt = (
+        f"Summarise the following research report titled '{clean_title}'. "
+        f"Produce a concise structured summary with these sections:\n"
+        f"1. **Key Findings** — bullet points of the most important conclusions\n"
+        f"2. **Data Highlights** — key financial metrics and data points\n"
+        f"3. **Risks & Concerns** — any risks or red flags mentioned\n"
+        f"4. **Recommendation** — the overall investment view\n\n"
+        f"Report content:\n\n{original_text[:8000]}"
+    )
+
+    result = answer_question(
+        question=summarise_prompt,
+        source_configs=[],
+        provider=_state.chat_provider,
+        system_prompt=(
+            "You are a precise research summariser. "
+            "Extract the most important information and present it "
+            "in a clear, structured format."
+        ),
+        temperature=0.1,
+        auto_truncate_prompt=True,
+    )
+
+    summary_content = result.get("response", "")
+    if not summary_content.strip():
+        summary_content = "Summary could not be generated."
+
+    # 3. Save the summary with the same base name, prefixed with "Summary_of_"
+    safe_base = _safe_filename(f"Summary_of_{clean_title}")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_filename = f"{safe_base.replace(' ', '_')}_{timestamp}.html"
+    summary_path = output_dir / summary_filename
+
+    # Render as HTML
+    from fin_ai.core.tools import _render_html, _md_to_html
+    html_body = _md_to_html(summary_content)
+    html = _render_html(effective_title, html_body)
+    summary_path.write_text(html, encoding="utf-8")
+
+    return json.dumps({
+        "status": "summarised",
+        "original_file": target.name,
+        "original_title": clean_title,
+        "summary_file": summary_filename,
+        "summary_path": str(summary_path),
+        "summary_title": effective_title,
+    }, indent=2)
+
+
+def _safe_filename(title: str) -> str:
+    """Sanitize title into a safe filename prefix."""
+    safe = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).rstrip()
+    return safe[:80] if safe else "research_report"
+
+
+# ---------------------------------------------------------------------------
 # Convenience: initialise with specific settings
 # ---------------------------------------------------------------------------
 
@@ -601,4 +891,7 @@ ENGINE_BRIDGE_TOOLS: dict[str, Any] = {
     "publish_research_report": publish_research_report,
     "send_research_email": send_research_email,
     "list_agent_profiles": list_agent_profiles,
+    "list_published_research": list_published_research,
+    "read_published_research": read_published_research,
+    "summarise_published_research": summarise_published_research,
 }

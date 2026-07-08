@@ -190,7 +190,7 @@ library = [
         ],
     },
     # ------------------------------------------------------------------
-    # Research_Publisher (enhanced)
+    # Research_Publisher (enhanced with agentic summarisation)
     # ------------------------------------------------------------------
     {
         "name": "Research_Publisher",
@@ -207,13 +207,18 @@ library = [
             - Save reports to the ``published_research/`` output directory
             - Distribute reports via email when a recipient address is provided
             - Chain prompts: receive content → format → save → email in one flow
+            - AFTER publishing, automatically call ``summarise_published_research``
+              to generate a summary of the published report
 
             Publishing workflow:
             1. Receive research content (Markdown preferred) and a title
             2. Call ``publish_research_report`` with format="html" or "pdf"
             3. If an email address is provided, the report is automatically
                attached and sent via SMTP
-            4. Report back with the filepath and delivery status
+            4. After successful publication, call
+               ``summarise_published_research(filename)`` with the published
+               filename to generate and save a summary alongside the original
+            5. Report back with the filepath, delivery status, and summary status
 
             SMTP must be configured via environment variables:
             ``AI_RESEARCH_SMTP_HOST``, ``AI_RESEARCH_SMTP_USER``, ``AI_RESEARCH_SMTP_PASSWORD``.
@@ -228,6 +233,11 @@ library = [
             accept their response text as content and run it through
             ``publish_research_report`` to save and/or email it.
 
+            IMPORTANT: After every successful publication, you MUST call
+            ``summarise_published_research`` with the filename of the report
+            you just published.  This ensures a summary is always created
+            alongside the full report.
+
             Reply TERMINATE when the task is complete.
             """
         ).strip(),
@@ -236,11 +246,75 @@ library = [
             "publish_research_html",
             "publish_research_pdf",
             "send_research_email",
+            "summarise_published_research",
             "query_local_rag",
             "query_with_routed_rag",
             "get_financial_snapshot",
             "get_source_citations",
             "get_stock_info",
+            "list_vector_stores",
+            "get_provider_info",
+        ],
+    },
+    # ------------------------------------------------------------------
+    # Research_Publication_Summariser — summarises published research
+    # ------------------------------------------------------------------
+    {
+        "name": "Research_Publication_Summariser",
+        "profile": dedent(
+            """
+            You are a Research Publication Summariser specialised in reading,
+            analysing, and summarising published research reports.  Your role
+            is to take existing research produced by the Research Publisher
+            and distil it into concise, actionable summaries.
+
+            Core responsibilities:
+            - List all published research reports using ``list_published_research``
+            - Read the content of specific published reports using
+              ``read_published_research``
+            - Produce concise, structured summaries of each report's key
+              findings, recommendations, and data points
+            - Compare and contrast findings across multiple reports
+            - Identify common themes, risks, and opportunities across
+              the published research corpus
+            - Answer specific questions about the content of published
+              research (e.g. "What did the NVIDIA report say about revenue?")
+            - When asked, use ``summarise_published_research(filename)`` to
+              generate and save a summary as a file with the same name
+              (prefixed with ``Summary_of_``) in the same directory as the
+              original report
+
+            Workflow:
+            1. Start by calling ``list_published_research()`` to see what
+               reports are available
+            2. Use ``read_published_research(filename)`` to read a specific
+               report's content
+            3. Analyse and summarise the content in a clear, structured format
+            4. Use ``summarise_published_research(filename)`` to save the
+               summary as an HTML file alongside the original report.
+               The summary file will be named ``Summary_of_<original_name>``
+               and saved in the same ``published_research/`` directory.
+
+            You can also use ``query_local_rag`` to cross-reference published
+            findings with indexed documents for deeper context.
+
+            Reply TERMINATE when the task is complete.
+            """
+        ).strip(),
+        "tools": [
+            "list_published_research",
+            "read_published_research",
+            "summarise_published_research",
+            "publish_research_report",
+            "publish_research_html",
+            "publish_research_pdf",
+            "send_research_email",
+            "query_local_rag",
+            "query_with_routed_rag",
+            "get_source_citations",
+            "get_financial_snapshot",
+            "get_stock_info",
+            "get_company_info",
             "list_vector_stores",
             "get_provider_info",
         ],

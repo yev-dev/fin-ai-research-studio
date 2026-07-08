@@ -547,17 +547,29 @@ def query_with_multi_source_prompting(
         proxy_port=proxy_port,
         auto_truncate_prompt=auto_truncate_prompt,
     )
-    response = _run_model_request(
-        provider=provider,
-        response_format=response_format,
-        prompt=prompt,
-        system_prompt=system_prompt or "You are a helpful financial analysis assistant.",
-        temperature=temperature,
-        max_tokens=max_tokens,
-        proxy_port=proxy_port,
-        auto_truncate_prompt=auto_truncate_prompt,
-        tools=tools,
-    )
+    try:
+        response = _run_model_request(
+            provider=provider,
+            response_format=response_format,
+            prompt=prompt,
+            system_prompt=system_prompt or "You are a helpful financial analysis assistant.",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            proxy_port=proxy_port,
+            auto_truncate_prompt=auto_truncate_prompt,
+            tools=tools,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"LLM request failed for provider={provider}, response_format={response_format}: {exc}"
+        ) from exc
+
+    if response is None or getattr(response, "content", None) is None:
+        raise RuntimeError(
+            f"LLM returned empty/None result for provider={provider}. "
+            f"response type={type(response).__name__}, dir={dir(response) if response else 'N/A'}"
+        )
+
     return MultiSourcePromptResult(
         retrieval=retrieval,
         prompt=prompt,

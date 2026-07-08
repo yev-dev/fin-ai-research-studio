@@ -37,7 +37,7 @@ from bs4 import BeautifulSoup
 import html2text
 from docx import Document as WordDocument
 
-from dashboard import DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, VECTOR_DB_DIR
+from fin_ai.config.fin_ai import DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, VECTOR_DB_DIR
 
 def _embedding_metadata_path(filename: str) -> Path:
     return Path(VECTOR_DB_DIR) / f"{filename}.embedding.json"

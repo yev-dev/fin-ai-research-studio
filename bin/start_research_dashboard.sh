@@ -5,7 +5,6 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 FIN_APP_PATH="$PROJECT_DIR/dashboard/financial_analyst_app.py"
-LITELLM_APP_PATH="$PROJECT_DIR/dashboard/litellm_app.py"
 VECTOR_DB_PATH_DEFAULT="$PROJECT_DIR/vector_db"
 
 if [ -n "${OLLAMA_CHATBOT_PYTHON:-}" ]; then
@@ -27,17 +26,13 @@ export VECTOR_DB_DIR="${VECTOR_DB_DIR:-$VECTOR_DB_PATH_DEFAULT}"
 cd "$PROJECT_DIR"
 
 FIN_DASHBOARD_PORT="${FIN_DASHBOARD_PORT:-8501}"
-LITELLM_DASHBOARD_PORT="${LITELLM_DASHBOARD_PORT:-8502}"
 
 "$PYTHON_CMD" -m streamlit run "$FIN_APP_PATH" --server.port "$FIN_DASHBOARD_PORT" "$@" &
 FIN_PID=$!
 
-"$PYTHON_CMD" -m streamlit run "$LITELLM_APP_PATH" --server.port "$LITELLM_DASHBOARD_PORT" "$@" &
-LITELLM_PID=$!
-
 cleanup() {
-    kill "$FIN_PID" "$LITELLM_PID" 2>/dev/null || true
+    kill "$FIN_PID" 2>/dev/null || true
 }
 
 trap cleanup INT TERM EXIT
-wait "$FIN_PID" "$LITELLM_PID"
+wait "$FIN_PID"

@@ -67,7 +67,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # ---------------------------------------------------------------------------
 
 DEFAULT_PROVIDER = os.environ.get("DEFAULT_PROVIDER", "ollama").strip().lower()
-DEFAULT_CHAT_MODEL = "llama3.1"
+DEFAULT_CHAT_MODEL = "gemma4:e4b"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text:latest"
 DEFAULT_EMBEDDINGS_PROVIDER = os.getenv("DEFAULT_EMBEDDINGS_PROVIDER", "ollama").strip().lower()
 
