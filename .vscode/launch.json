@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Financial Document Analyst Dashboard",
+            "name": "AI Research Hub",
             "type": "debugpy",
             "request": "launch",
             "python": "${command:python.interpreterPath}",
@@ -94,7 +94,7 @@
         {
             "name": "Start Both Dashboards",
             "configurations": [
-                "Financial Document Analyst Dashboard",
+                "AI Research Hub",
                 "LiteLLM Dashboard"
             ]
         }

@@ -99,7 +99,7 @@ _PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
     "ollama": ProviderConfig(
         label="Local Ollama",
         optional_params=("api_base", "proxy_port"),
-        default_base_url="http://localhost:11434",
+        default_base_url="http://192.168.1.188:11434",
         model_format="ollama/{model}",
     ),
     "github": ProviderConfig(
@@ -165,7 +165,7 @@ def resolve_model_name(provider: Provider) -> str:
     """
     cfg = get_provider_config(provider)
     if provider == "ollama":
-        return cfg.build_model_string(os.getenv("OLLAMA_MODEL", "llama3.1"))
+        return cfg.build_model_string(os.getenv("OLLAMA_MODEL", "llama3.2"))
     if provider == "github":
         return os.getenv("GITHUB_MODEL", "openai/gpt-4o")
     if provider == "deepseek":

@@ -98,7 +98,7 @@ with st.sidebar:
             ol_models = list_models("ollama", base_url=_ol_endpoint)
         ol_model_ids = [m.id for m in ol_models]
         if ol_model_ids:
-            default_ol = os.getenv("OLLAMA_MODEL", "llama3.1")
+            default_ol = os.getenv("OLLAMA_MODEL", "llama3.2")
             default_ol_idx = ol_model_ids.index(default_ol) if default_ol in ol_model_ids else 0
             st.selectbox("Model", ol_model_ids, index=default_ol_idx, key="ollama_model")
         else:

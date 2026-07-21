@@ -9,10 +9,13 @@ ROOT = Path(__file__).parent.resolve()
 SRC_DIR = ROOT / "src"
 README_PATH = ROOT / "README.md"
 REQUIREMENTS_PATH = ROOT / "requirements.txt"
+REQUIREMENTS_PATH_WIN = ROOT / "requirements-win.txt"
 
 
 def read_requirements(path: Path) -> list[str]:
     """Parse pinned requirements from pip-compile output."""
+
+    
     requirements: list[str] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()

@@ -55,7 +55,7 @@ def list_ollama_models(
 
     Uses Ollama's ``/api/tags`` endpoint to retrieve the list of pulled models.
     """
-    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434")).rstrip("/")
+    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://192.168.1.188:11434")).rstrip("/")
     url = f"{endpoint}/api/tags"
 
     try:
@@ -145,7 +145,7 @@ def list_deepseek_models(
     endpoint.  Falls back to a hardcoded list of known models on error.
     """
     token = api_key or os.getenv("DEEPSEEK_TOKEN") or os.getenv("DEEPSEAK_TOKEN", "")
-    base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+    base_url = kwargs.get("base_url") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     url = f"{base_url.rstrip('/')}/models"
     headers: dict[str, str] = {"User-Agent": "fin-ai/1.0"}
     if token:

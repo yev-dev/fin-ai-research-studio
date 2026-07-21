@@ -316,6 +316,12 @@ def answer_question(
     auto_truncate_prompt: bool = True,
     use_tools: bool = False,
     response_format: str = "text",
+    model: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    proxy_port: int | None = None,
+    http_proxy_port: int | None = None,
+    https_proxy_port: int | None = None,
 ) -> dict[str, Any]:
     """Run a RAG query against the selected vector stores."""
     start_time = perf_counter()
@@ -330,6 +336,12 @@ def answer_question(
         mode=retrieval_mode,
         system_prompt=effective_system,
         temperature=temperature,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        proxy_port=proxy_port,
+        http_proxy_port=http_proxy_port,
+        https_proxy_port=https_proxy_port,
         auto_truncate_prompt=auto_truncate_prompt,
         tools=YAHOO_FINANCE_TOOLS if use_tools else None,
     )
@@ -345,11 +357,23 @@ def answer_question(
                 prompt=question,
                 system_prompt=effective_system,
                 temperature=temperature,
+                proxy_port=proxy_port,
+                http_proxy_port=http_proxy_port,
+                https_proxy_port=https_proxy_port,
                 auto_truncate_prompt=auto_truncate_prompt,
                 tools=YAHOO_FINANCE_TOOLS,
                 messages=follow_up_messages,
             )
-            requester = ModelRequest(provider=provider, format="text")
+            requester = ModelRequest(
+                provider=provider,
+                format="text",
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                proxy_port=proxy_port,
+                http_proxy_port=http_proxy_port,
+                https_proxy_port=https_proxy_port,
+            )
             llm_response = requester.client.send(follow_up_payload, response_class=requester.response_class)
 
     content = llm_response.content if llm_response else ""
@@ -415,10 +439,21 @@ def build_agent_llm_config(
             "timeout": 120,
         }
     else:
-        base = ollama_base_url or OLLAMA_BASE_URL
+        base = (ollama_base_url or OLLAMA_BASE_URL).rstrip("/")
+        # AutoGen uses OpenAI-compatible chat completions routes, so Ollama
+        # must include the /v1 prefix (http://host:11434/v1/chat/completions).
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
         return {
             "config_list": [
-                {"model": model, "base_url": base, "api_key": "ollama"}
+                {
+                    "model": model,
+                    "base_url": base,
+                    "api_key": "ollama",
+                    # Local models have no per-token API billing; this silences
+                    # AutoGen's unknown-model pricing warning.
+                    "price": [0, 0],
+                }
             ],
             "temperature": 0,
             "timeout": 120,

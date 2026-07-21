@@ -273,6 +273,7 @@ from email.mime.multipart import MIMEMultipart as _MIMEMultipart
 from email.mime.base import MIMEBase as _MIMEBase
 from email import encoders as _encoders
 from pathlib import Path as _Path
+import re as _re
 
 from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR
 
@@ -322,20 +323,30 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 def _md_to_html(content: str) -> str:
-    """Convert Markdown content to HTML, falling back to <pre> if no markers."""
-    if any(marker in content for marker in ("#", "##", "**", "```", "- ", "* ")):
+    """Convert Markdown/plain/HTML content to HTML for publishing."""
+    text = (content or "").strip()
+    if not text:
+        return "<p><em>No report content was provided.</em></p>"
+
+    # If the agent already produced HTML, render it directly.
+    if _re.search(r"<\s*/?\s*[a-zA-Z][^>]*>", text):
+        return text
+
+    if any(marker in text for marker in ("#", "##", "**", "```", "- ", "* ")):
         try:
             import markdown as _mdlib
             return _mdlib.markdown(
-                content,
+                text,
                 extensions=["tables", "fenced_code", "codehilite", "nl2br"],
             )
         except ImportError:
             # Fallback: use markdown-it-py (already in requirements.txt)
             from markdown_it import MarkdownIt
             md = MarkdownIt("commonmark", {"breaks": True, "html": True})
-            return md.render(content)
-    return f"<pre>{content}</pre>"
+            return md.render(text)
+
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"<pre>{escaped}</pre>"
 
 
 def _render_html(title: str, html_body: str) -> str:
@@ -398,6 +409,7 @@ def publish_research_pdf(content: str, title: str = "Research Report") -> str:
     timestamp = _datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = safe_title.replace(" ", "_")
 
+    fallback_reason = ""
     try:
         from weasyprint import HTML as _WHTML
         pdf_path = _OUTPUT_DIR / f"{prefix}_{timestamp}.pdf"
@@ -410,8 +422,12 @@ def publish_research_pdf(content: str, title: str = "Research Report") -> str:
             "title": title,
             "engine": "weasyprint",
         }, indent=2)
-    except ImportError:
-        pass
+    except ImportError as exc:
+        fallback_reason = f"weasyprint import failed: {exc}"
+    except Exception as exc:
+        # Native PDF dependencies (e.g., pango/cairo) may be unavailable.
+        # Gracefully fall back to a printable HTML artifact.
+        fallback_reason = str(exc)
 
     html_path = _OUTPUT_DIR / f"{prefix}_{timestamp}_printable.html"
     html_path.write_text(html, encoding="utf-8")
@@ -423,6 +439,7 @@ def publish_research_pdf(content: str, title: str = "Research Report") -> str:
         "filename": html_path.name,
         "title": title,
         "note": "Open in browser and Ctrl+P / Cmd+P to save as PDF.",
+        "fallback_reason": fallback_reason,
     }, indent=2)
 
 

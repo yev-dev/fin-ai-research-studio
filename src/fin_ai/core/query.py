@@ -515,6 +515,11 @@ def query_with_multi_source_prompting(
     temperature: float = 0.2,
     max_tokens: int | None = None,
     proxy_port: int | None = None,
+    http_proxy_port: int | None = None,
+    https_proxy_port: int | None = None,
+    model: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
     global_metadata_filter: dict[str, Any] | None = None,
     per_source_metadata_filters: dict[str, dict[str, Any]] | None = None,
     max_sources: int | None = None,
@@ -545,6 +550,11 @@ def query_with_multi_source_prompting(
         temperature=temperature,
         max_tokens=max_tokens,
         proxy_port=proxy_port,
+        http_proxy_port=http_proxy_port,
+        https_proxy_port=https_proxy_port,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
         auto_truncate_prompt=auto_truncate_prompt,
     )
     response = _run_model_request(
@@ -555,6 +565,11 @@ def query_with_multi_source_prompting(
         temperature=temperature,
         max_tokens=max_tokens,
         proxy_port=proxy_port,
+        http_proxy_port=http_proxy_port,
+        https_proxy_port=https_proxy_port,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
         auto_truncate_prompt=auto_truncate_prompt,
         tools=tools,
     )
@@ -576,9 +591,14 @@ def _compress_prompt_for_oversized_requests(
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
+    http_proxy_port: int | None,
+    https_proxy_port: int | None,
+    model: str | None,
+    api_base: str | None,
+    api_key: str | None,
     auto_truncate_prompt: bool,
 ) -> str:
-    model_name = resolve_model_name(provider)
+    model_name = model or resolve_model_name(provider)
     safe_budget = get_model_safe_input_budget(model_name)
     if safe_budget is None:
         return prompt
@@ -599,6 +619,11 @@ def _compress_prompt_for_oversized_requests(
         temperature=temperature,
         max_tokens=max_tokens,
         proxy_port=proxy_port,
+        http_proxy_port=http_proxy_port,
+        https_proxy_port=https_proxy_port,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
         auto_truncate_prompt=auto_truncate_prompt,
         safe_budget=safe_budget,
     )
@@ -613,6 +638,11 @@ def _summarize_retrieval_for_question(
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
+    http_proxy_port: int | None,
+    https_proxy_port: int | None,
+    model: str | None,
+    api_base: str | None,
+    api_key: str | None,
     auto_truncate_prompt: bool,
     safe_budget: int,
 ) -> dict[str, list[str]]:
@@ -633,6 +663,11 @@ def _summarize_retrieval_for_question(
                 temperature=min(temperature, 0.2),
                 max_tokens=min(max_tokens, 400) if max_tokens is not None else 400,
                 proxy_port=proxy_port,
+                http_proxy_port=http_proxy_port,
+                https_proxy_port=https_proxy_port,
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
                 auto_truncate_prompt=auto_truncate_prompt,
                 tools=None,
             )
@@ -763,18 +798,34 @@ def _run_model_request(
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
+    http_proxy_port: int | None,
+    https_proxy_port: int | None,
+    model: str | None,
+    api_base: str | None,
+    api_key: str | None,
     auto_truncate_prompt: bool = True,
     tools: list[dict[str, Any]] | None = None,
 ) -> ModelResponse:
     from .request import ModelRequest, RequestPayload
 
-    return ModelRequest(provider=provider, format=response_format).request(
+    return ModelRequest(
+        provider=provider,
+        format=response_format,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        proxy_port=proxy_port,
+        http_proxy_port=http_proxy_port,
+        https_proxy_port=https_proxy_port,
+    ).request(
         RequestPayload(
             prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             proxy_port=proxy_port,
+            http_proxy_port=http_proxy_port,
+            https_proxy_port=https_proxy_port,
             auto_truncate_prompt=auto_truncate_prompt,
             tools=tools,
         )
