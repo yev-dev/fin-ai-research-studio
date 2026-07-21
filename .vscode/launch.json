@@ -94,7 +94,7 @@
         {
             "name": "Start Both Dashboards",
             "configurations": [
-                "Financial Document Analyst Dashboard",
+                "AI Research Hub",
                 "LiteLLM Dashboard"
             ]
         }

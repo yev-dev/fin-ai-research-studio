@@ -20,6 +20,7 @@ from typing import Any
 
 import requests
 from requests.exceptions import RequestException
+import logging
 
 from fin_ai.core.request import get_provider_config
 
@@ -137,7 +138,15 @@ class _GitHubEmbeddings:
                     f"Failed to call embedding endpoint {url}: {re}.{detail}"
                 ) from re
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as exc:
+            text = getattr(resp, "text", None)
+            snippet = text[:1000] if isinstance(text, str) else str(text)
+            raise RuntimeError(
+                f"Failed to decode JSON from embedding endpoint {url} (status={getattr(resp, 'status_code', None)}). Response: {snippet}"
+            ) from exc
+
         if isinstance(data, dict):
             if "data" in data and isinstance(data["data"], list):
                 embeddings = []
@@ -153,7 +162,12 @@ class _GitHubEmbeddings:
                 return data["embeddings"]
         if isinstance(data, list) and all(isinstance(i, list) for i in data):
             return data
-        raise RuntimeError(f"Unable to parse embeddings response: {data}")
+        # Include status code and (truncated) raw response for easier debugging
+        raw = getattr(resp, "text", None)
+        raw_snip = raw[:1000] if isinstance(raw, str) else str(raw)
+        raise RuntimeError(
+            f"Unable to parse embeddings response (status={getattr(resp, 'status_code', None)}): {data}. Raw response: {raw_snip}"
+        )
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._request(texts)
@@ -199,9 +213,16 @@ def create_embeddings(
     An object with ``embed_query(text)``, ``embed_documents(texts)``, and
     ``__call__(text)`` methods.
     """
+    logger = logging.getLogger(__name__)
     cfg = get_provider_config(provider)
     resolved_base = cfg.build_api_base(api_base)
     resolved_key = api_key or os.getenv("GITHUB_TOKEN", "")
+
+    # Log whether an API key was provided (do not log the key itself).
+    if resolved_key:
+        logger.debug("Embeddings: using provided GitHub API key (redacted)")
+    else:
+        logger.debug("Embeddings: no GitHub API key provided; proceeding without Authorization header")
 
     if provider == "ollama":
         return _create_ollama_embeddings(model, resolved_base)

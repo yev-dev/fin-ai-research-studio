@@ -111,6 +111,28 @@ def get_cached_pdf_page_paths(pdf_path: str, images_folder: str, zoom: float, so
     del source_mtime
     return tuple(str(p) for p in render_pdf_pages(pdf_path, images_folder, zoom=zoom))
 
+
+def _parse_int_or_none(value: str | None) -> int | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+@st.cache_data(ttl=20)
+def get_provider_model_ids(provider: str, api_key: str = "", base_url: str = "") -> list[str]:
+    listing_provider = provider.removeprefix("proxied_")
+    kwargs: dict[str, str] = {}
+    if api_key:
+        kwargs["api_key"] = api_key
+    if base_url:
+        kwargs["base_url"] = base_url
+    models = fetch_models(listing_provider, **kwargs)
+    return [m.id for m in models if getattr(m, "id", "")]
+
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -284,6 +306,8 @@ github_token = os.getenv("GITHUB_TOKEN", "")
 github_endpoint = os.getenv("GITHUB_ENDPOINT", "https://models.github.ai/inference")
 deepseek_token = os.getenv("DEEPSEEK_TOKEN", "")
 deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL)
+ollama_chat_base_url = os.getenv("OLLAMA_ENDPOINT", OLLAMA_BASE_URL)
+proxy_port: int | None = None
 http_proxy_port: int | None = None
 https_proxy_port: int | None = None
 
@@ -306,6 +330,8 @@ if "api_base" in _pcfg.optional_params:
         github_endpoint = _base_val
     elif selected_provider == "deepseek" or selected_provider == "proxied_deepseek":
         deepseek_base_url = _base_val
+    elif selected_provider == "ollama":
+        ollama_chat_base_url = _base_val
 
 # Proxy ports: single-port mode (proxy_port) or split-port mode (http_proxy_port, https_proxy_port)
 _show_proxy = "proxy_port" in _pcfg.optional_params or "http_proxy_port" in _pcfg.optional_params
@@ -314,52 +340,58 @@ if _show_proxy:
         if "proxy_port" in _pcfg.optional_params:
             _default_proxy = os.getenv("PX_PROXY_PORT", "")
             proxy_port_val = st.text_input("Proxy Port", value=_default_proxy, key=f"{selected_provider}_proxy_port")
+            proxy_port = _parse_int_or_none(proxy_port_val)
         if "http_proxy_port" in _pcfg.optional_params or "https_proxy_port" in _pcfg.optional_params:
             _default_http = os.getenv("PX_HTTP_PROXY_PORT", "")
             _default_https = os.getenv("PX_HTTPS_PROXY_PORT", "")
             http_proxy_port_val = st.text_input("HTTP Proxy Port", value=_default_http, key=f"{selected_provider}_http_proxy_port")
             https_proxy_port_val = st.text_input("HTTPS Proxy Port", value=_default_https, key=f"{selected_provider}_https_proxy_port")
+            http_proxy_port = _parse_int_or_none(http_proxy_port_val)
+            https_proxy_port = _parse_int_or_none(https_proxy_port_val)
 
 # --- Model selection ---
 if selected_provider == "github":
-    try:
-        with st.spinner("Fetching available GitHub models..."):
-            gh_models = fetch_models("github", api_key=github_token)
-        display_model_options = [m.id for m in gh_models] or [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
-    except Exception:
+    with st.spinner("Fetching available GitHub models..."):
+        display_model_options = get_provider_model_ids("github", api_key=github_token, base_url=github_endpoint)
+    if not display_model_options:
         display_model_options = [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
     default_chat_model = os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)
     default_chat_index = display_model_options.index(default_chat_model) if default_chat_model in display_model_options else 0
     selected_model = st.sidebar.selectbox("Select Model", display_model_options, index=default_chat_index, key="github_model")
 elif selected_provider == "proxied_github":
-    display_model_options = [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
+    with st.spinner("Fetching available GitHub models..."):
+        display_model_options = get_provider_model_ids("proxied_github", api_key=os.getenv("GITHUB_TOKEN", ""), base_url=github_endpoint)
+    if not display_model_options:
+        display_model_options = [os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)]
     default_chat_model = os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)
-    selected_model = st.sidebar.text_input("Model", value=default_chat_model, key="proxied_github_model")
+    default_chat_index = display_model_options.index(default_chat_model) if default_chat_model in display_model_options else 0
+    selected_model = st.sidebar.selectbox("Select Model", display_model_options, index=default_chat_index, key="proxied_github_model")
 
 elif selected_provider == "deepseek":
-    try:
-        with st.spinner("Fetching available DeepSeek models..."):
-            ds_models = fetch_models("deepseek", api_key=deepseek_token)
-        deepseek_model_ids = [m.id for m in ds_models]
-    except Exception:
-        deepseek_model_ids = []
-    if deepseek_model_ids:
-        default_ds = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
-        default_ds_idx = deepseek_model_ids.index(default_ds) if default_ds in deepseek_model_ids else 0
-        selected_model = st.sidebar.selectbox("Select Model", deepseek_model_ids, index=default_ds_idx, key="deepseek_model")
-    else:
-        selected_model = st.sidebar.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="deepseek_model_fallback")
+    with st.spinner("Fetching available DeepSeek models..."):
+        deepseek_model_ids = get_provider_model_ids("deepseek", api_key=deepseek_token, base_url=deepseek_base_url)
+    if not deepseek_model_ids:
+        deepseek_model_ids = [os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)]
+    default_ds = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
+    default_ds_idx = deepseek_model_ids.index(default_ds) if default_ds in deepseek_model_ids else 0
+    selected_model = st.sidebar.selectbox("Select Model", deepseek_model_ids, index=default_ds_idx, key="deepseek_model")
 
 elif selected_provider == "proxied_deepseek":
-    selected_model = st.sidebar.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="proxied_deepseek_model")
+    with st.spinner("Fetching available DeepSeek models..."):
+        proxied_ds_models = get_provider_model_ids("proxied_deepseek", api_key=os.getenv("DEEPSEEK_TOKEN", ""), base_url=deepseek_base_url)
+    if not proxied_ds_models:
+        proxied_ds_models = [os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)]
+    default_ds = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
+    default_ds_idx = proxied_ds_models.index(default_ds) if default_ds in proxied_ds_models else 0
+    selected_model = st.sidebar.selectbox("Select Model", proxied_ds_models, index=default_ds_idx, key="proxied_deepseek_model")
 
 else:  # ollama
     default_chat_model = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)
-    try:
-        default_chat_index = available_chat_models.index(default_chat_model) if default_chat_model in available_chat_models else 0
-    except ValueError:
-        default_chat_index = 0
-    selected_model = st.sidebar.selectbox("Model", available_chat_models, index=default_chat_index, key="ollama_chat_model")
+    with st.spinner("Fetching available Ollama models..."):
+        ollama_model_ids = get_provider_model_ids("ollama", base_url=ollama_chat_base_url)
+    display_ollama_models = ollama_model_ids or available_chat_models or [default_chat_model]
+    default_chat_index = display_ollama_models.index(default_chat_model) if default_chat_model in display_ollama_models else 0
+    selected_model = st.sidebar.selectbox("Model", display_ollama_models, index=default_chat_index, key="ollama_chat_model")
 
 response_type = st.sidebar.selectbox("Select Response Type", ["Plain Text", "Markdown", "Python Code"], index=1, key="response_type")
 auto_truncate_prompt = st.sidebar.checkbox("Auto-truncate prompt (gpt-5 guard)", value=True)
@@ -393,30 +425,59 @@ selected_emb_provider_label = st.sidebar.selectbox("Select Embedding Provider", 
 selected_emb_provider = embeddings_provider_label_to_key[selected_emb_provider_label]
 
 if selected_emb_provider == "github":
+    embedding_github_base_url = st.sidebar.text_input(
+        "GitHub Embedding Base URL",
+        value=os.getenv("GITHUB_EMBEDDING_BASE_URL", GITHUB_EMBEDDING_BASE_URL),
+        key="embedding_github_base_url",
+    )
     embedding_github_token = st.sidebar.text_input("GitHub Token (Embeddings)", value=os.getenv("GITHUB_TOKEN", ""), type="password", key="embedding_github_token")
-    try:
-        with st.spinner("Fetching GitHub embedding models..."):
-            emb_models = fetch_models("github", api_key=embedding_github_token)
-        embedding_model_ids = [m.id for m in emb_models if _looks_like_embedding_model(m.id)]
-    except Exception:
-        embedding_model_ids = []
+    with st.spinner("Fetching GitHub embedding models..."):
+        embedding_model_ids = [
+            m for m in get_provider_model_ids("github", api_key=embedding_github_token, base_url=embedding_github_base_url)
+            if _looks_like_embedding_model(m)
+        ]
     available_embedding_models_display = embedding_model_ids if embedding_model_ids else [DEFAULT_GITHUB_EMBEDDING_MODEL, "openai/text-embedding-3-large"]
-    if emb_models and not embedding_model_ids:
+    if not embedding_model_ids:
         st.sidebar.warning(
             "No embedding-capable GitHub models were detected from the catalog. "
             "Using safe defaults to avoid 400 errors from /embeddings."
         )
     default_emb_model_idx = available_embedding_models_display.index(DEFAULT_GITHUB_EMBEDDING_MODEL) if DEFAULT_GITHUB_EMBEDDING_MODEL in available_embedding_models_display else 0
-    embeddings_base_url = os.getenv("GITHUB_EMBEDDING_BASE_URL", GITHUB_EMBEDDING_BASE_URL)
+    embeddings_base_url = embedding_github_base_url
 else:
     ollama_emb_endpoint = st.sidebar.text_input("Ollama Endpoint (Embeddings)", value=os.getenv("OLLAMA_ENDPOINT", OLLAMA_BASE_URL), key="embedding_ollama_endpoint")
-    available_embedding_models_display = available_embedding_models
+    with st.spinner("Fetching available Ollama embedding models..."):
+        ollama_embedding_models = [
+            m for m in get_provider_model_ids("ollama", base_url=ollama_emb_endpoint)
+            if _looks_like_embedding_model(m)
+        ]
+    available_embedding_models_display = ollama_embedding_models or available_embedding_models or [DEFAULT_EMBEDDING_MODEL]
     default_emb_model_idx = available_embedding_models_display.index(DEFAULT_EMBEDDING_MODEL) if DEFAULT_EMBEDDING_MODEL in available_embedding_models_display else 0
     embeddings_base_url = ollama_emb_endpoint
 
 selected_embedding_model = st.sidebar.selectbox("Select Embedding Model", available_embedding_models_display, index=default_emb_model_idx, key="embedding_model")
 
 st.sidebar.divider()
+
+# -- Active runtime config --------------------------------------------------
+_active_chat_base = (
+    github_endpoint
+    if selected_provider in ("github", "proxied_github")
+    else deepseek_base_url
+    if selected_provider in ("deepseek", "proxied_deepseek")
+    else ollama_chat_base_url
+)
+st.sidebar.caption(
+    "\n".join(
+        [
+            "Active Runtime Config",
+            f"Chat: {selected_provider} | {selected_model}",
+            f"Chat Base: {_active_chat_base}",
+            f"Embeddings: {selected_emb_provider} | {selected_embedding_model}",
+            f"Embedding Base: {embeddings_base_url}",
+        ]
+    )
+)
 
 # -- Previous Questions -----------------------------------------------------
 if vector_db_names:
@@ -584,24 +645,12 @@ if vector_db_names:
             pass
 
     try:
-        saved_emb_meta = load_embedding_metadata(vector_db_names[0])
-        if saved_emb_meta:
-            actual_emb_provider = saved_emb_meta["provider"]
-            actual_emb_model = saved_emb_meta["model"]
-            actual_emb_base_url = saved_emb_meta["base_url"]
-            embeddings = create_embeddings(
-                provider=actual_emb_provider,
-                model=actual_emb_model,
-                api_base=actual_emb_base_url,
-                api_key=_github_token if actual_emb_provider == "github" else None,
-            )
-        else:
-            embeddings = create_embeddings(
-                provider=selected_emb_provider,
-                model=selected_embedding_model,
-                api_base=embeddings_base_url,
-                api_key=_github_token if selected_emb_provider == "github" else None,
-            )
+        embeddings = create_embeddings(
+            provider=selected_emb_provider,
+            model=selected_embedding_model,
+            api_base=embeddings_base_url,
+            api_key=_github_token if selected_emb_provider == "github" else None,
+        )
     except Exception as e:
         st.sidebar.error(f"Embeddings error: {e}")
 
@@ -707,6 +756,24 @@ if vector_db_names:
                         question,
                         active_configs,
                         provider=selected_provider,
+                        model=selected_model,
+                        api_base=(
+                            github_endpoint
+                            if selected_provider in ("github", "proxied_github")
+                            else deepseek_base_url
+                            if selected_provider in ("deepseek", "proxied_deepseek")
+                            else ollama_chat_base_url
+                        ),
+                        api_key=(
+                            github_token
+                            if selected_provider == "github"
+                            else deepseek_token
+                            if selected_provider == "deepseek"
+                            else None
+                        ),
+                        proxy_port=proxy_port,
+                        http_proxy_port=http_proxy_port,
+                        https_proxy_port=https_proxy_port,
                         system_prompt="You are a concise financial analysis assistant.",
                         temperature=0.2,
                         retrieval_mode=retrieval_mode,
@@ -755,7 +822,7 @@ if agent_submit and agent_rag_query.strip():
         agent_llm_config = build_agent_llm_config(
             provider=selected_provider,
             model=selected_model,
-            ollama_base_url=OLLAMA_BASE_URL,
+            ollama_base_url=ollama_chat_base_url,
             github_endpoint=github_endpoint,
             github_token=_effective_gh_token,
             deepseek_base_url=deepseek_base_url,

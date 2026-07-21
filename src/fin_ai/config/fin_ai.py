@@ -57,7 +57,7 @@ YAHOO_DATA_DIR = os.environ.get(
 # Provider endpoints
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434").rstrip("/")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://192.168.1.188:11434").rstrip("/")
 GITHUB_BASE_URL = "https://models.github.ai/inference"
 GITHUB_EMBEDDING_BASE_URL = "https://models.github.ai/inference"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -67,7 +67,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # ---------------------------------------------------------------------------
 
 DEFAULT_PROVIDER = os.environ.get("DEFAULT_PROVIDER", "ollama").strip().lower()
-DEFAULT_CHAT_MODEL = "llama3.1"
+DEFAULT_CHAT_MODEL = "llama3.2"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text:latest"
 DEFAULT_EMBEDDINGS_PROVIDER = os.getenv("DEFAULT_EMBEDDINGS_PROVIDER", "ollama").strip().lower()
 
