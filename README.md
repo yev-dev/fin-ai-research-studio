@@ -13,6 +13,8 @@ Finance sources.
 
 FinAI Research Studio lets you:
 
+![AI Research Studio ](docs/images/research-studio.png)
+
 - **Upload financial documents** (PDF, CSV, JSON, HTML, DOCX) and index them into FAISS
   vector stores for semantic search
 - **Query documents** with LLM-powered RAG across multiple sources, grouped by type
@@ -30,6 +32,9 @@ Embeddings are numeric vector representations of text that capture semantic mean
 similar questions and passages are close in vector space. Vectors are stored and searched
 with **FAISS** (Facebook AI Similarity Search).
 
+
+![RAG Uploaded Document ](docs/images/rag-uploaded-document.png)
+
 ---
 
 ## Agentic Framework
@@ -38,7 +43,7 @@ The `src/fin_ai/agents/` package provides a multi-agent orchestration framework 
 on Microsoft **AutoGen** (AG2). Agents are configurable, tool-aware, and can communicate
 with each other and with the local RAG infrastructure.
 
-![Agent Architecture](docs/images/agents.png)
+
 
 ### Agent Library
 

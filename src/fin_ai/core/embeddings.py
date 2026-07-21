@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
+
 from typing import Any
 
 import requests
@@ -126,6 +127,13 @@ class _GitHubEmbeddings:
                         f"Embedding API rate limit exceeded after {max_retries} retries. "
                         f"Set a token for higher rate limits.{detail}"
                     ) from re
+                if status == 401:
+                    raise RuntimeError(
+                        f"Embedding endpoint returned 401 Unauthorized. "
+                        f"The GitHub token may be invalid or expired. "
+                        f"Generate a new token at https://github.com/settings/tokens "
+                        f"with access to GitHub Models.{detail}"
+                    ) from re
                 raise RuntimeError(
                     f"Failed to call embedding endpoint {url}: {re}.{detail}"
                 ) from re
@@ -220,6 +228,11 @@ def create_embeddings(
         return _create_ollama_embeddings(model, resolved_base)
 
     if provider in ("github", "deepseek"):
+        if provider == "github" and not resolved_key:
+            raise ValueError(
+                "GitHub provider requires an API token. "
+                "Set the GITHUB_TOKEN environment variable or pass api_key."
+            )
         return _GitHubEmbeddings(model=model, endpoint=resolved_base, token=resolved_key)
 
     raise ValueError(f"Unknown embeddings provider: {provider!r}")
