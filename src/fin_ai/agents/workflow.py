@@ -132,6 +132,13 @@ class AIAgent(AssistantAgent):
 
         name = name.replace(" ", "_").strip()
 
+        completion_guard = (
+            "\n\nCompletion rules: provide the final answer directly once you have enough "
+            "information. Do not ask the user to continue, do not ask for permission, and "
+            "do not end with a question. After the final answer, end the message with TERMINATE."
+        )
+        system_message = (system_message or "") + completion_guard
+
         super().__init__(
             name,
             system_message,

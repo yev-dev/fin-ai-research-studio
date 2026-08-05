@@ -80,6 +80,7 @@ from fin_ai.core.providers import list_models
 from fin_ai.core.query import format_source_citations
 from fin_ai.core.rag import load_embedding_metadata
 from fin_ai.core.request import known_providers, get_provider_config
+from fin_ai.agents.prompts_library import RESEARCH_ANALYSIS
 
 # Agent library for sidebar listing
 from fin_ai.agents.agent_library import library as agent_library
@@ -120,6 +121,21 @@ def _parse_int_or_none(value: str | None) -> int | None:
         return int(raw)
     except ValueError:
         return None
+
+
+KNOWN_SOURCE_GROUPS = {"pdf", "csv", "json", "html", "url"}
+
+
+def _normalize_source_groups(group_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for group, names in group_map.items():
+        key = str(group).strip().lower()
+        if key not in KNOWN_SOURCE_GROUPS:
+            continue
+        normalized.setdefault(key, []).extend(
+            str(name).removesuffix(".faiss") for name in names
+        )
+    return {group: sorted(set(names)) for group, names in normalized.items()}
 
 
 @st.cache_data(ttl=20)
@@ -581,6 +597,8 @@ agent_rag_query = ""
 selected_agent = ""
 agent_format = "html"
 agent_email = ""
+agent_prompt_template = "Custom"
+agent_prompt_asset = "NVDA"
 
 st.subheader("Agent Workflows")
 st.caption(
@@ -605,12 +623,31 @@ with agent_col2:
         key="agent_format_main",
     )
 
-agent_rag_query = st.text_area(
-    "Agent Task Prompt",
-    placeholder='e.g. "Analyse NVDA financials and competitive position"',
-    key="agent_prompt_main",
-    height=80,
-)
+with st.expander("Prompt Controls", expanded=True):
+    agent_prompt_template = st.selectbox(
+        "Template",
+        ["Custom", *RESEARCH_ANALYSIS.keys()],
+        index=0,
+        key="agent_prompt_template_main",
+    )
+    agent_prompt_asset = st.text_input(
+        "Asset Symbol",
+        value=st.session_state.get("agent_prompt_asset_main", "NVDA"),
+        key="agent_prompt_asset_main",
+        help="Used to populate the selected prompt template.",
+    )
+
+    if agent_prompt_template != "Custom":
+        st.session_state["agent_prompt_main"] = RESEARCH_ANALYSIS[agent_prompt_template].format(
+            asset=agent_prompt_asset.strip() or "NVDA"
+        )
+
+    agent_rag_query = st.text_area(
+        "Agent Task Prompt",
+        placeholder='e.g. "Analyse NVDA financials and competitive position"',
+        key="agent_prompt_main",
+        height=180,
+    )
 
 agent_col_a, agent_col_b, agent_col_c = st.columns([1, 1, 3])
 with agent_col_a:
@@ -645,6 +682,7 @@ retrieval_mode = _retrieval_mode
 selected_source_names = []
 available_source_names = []
 available_source_groups: list[str] = []
+source_groups_map_norm: dict[str, list[str]] = {}
 query_source_configs = []
 loaded_stores: dict[str, FAISS] = {}
 
@@ -671,33 +709,31 @@ if vector_db_names:
     try:
         if embeddings is None:
             raise RuntimeError("No embeddings available — check the sidebar for errors.")
-        loaded_stores = load_vector_stores_for_query(selected_query_vector_dbs, source_vector_stores, embeddings)
-        query_source_configs = build_query_source_configs(loaded_stores, group_by="vector_db")
-        available_source_names = [c.name for c in query_source_configs]
-        # Discover source groups (source_type values) from loaded stores
-        source_groups_map = discover_source_groups(loaded_stores)
-        available_source_groups = sorted(source_groups_map.keys())
+        # Build available source groups/names from the RAG registry so the
+        # UI shows all registered documents, not only those currently
+        # loaded into memory (loading all stores can be expensive).
+        source_groups_map_norm = _normalize_source_groups(discover_source_groups())
+        available_source_groups = sorted(source_groups_map_norm.keys())
 
-        # Restrict available source names to those that belong to known
-        # source groups to avoid presenting unknown/invalid types. Normalize
-        # group keys to lowercase first so 'PDF' and 'pdf' are equivalent.
-        KNOWN_SOURCE_GROUPS = ["pdf", "csv", "json", "html"]
-        valid_names: set[str] = set()
-        for grp_key, names in source_groups_map.items():
-            if str(grp_key).lower().strip() in KNOWN_SOURCE_GROUPS:
-                valid_names.update(names)
-        # If we found known names, filter. If none found, avoid emptying the
-        # available list (fall back to showing everything) to prevent hiding
-        # documents when types are non-standard.
-        if valid_names:
-            available_source_names = [n for n in available_source_names if n in valid_names]
+        # Available source names should reflect what's registered and also
+        # exist as vector DBs on disk (vector_db_names).
+        available_source_names = sorted(
+            {
+                name
+                for names in source_groups_map_norm.values()
+                for name in names
+                if name in vector_db_names
+            }
+        )
+        if not available_source_names:
+            available_source_names = vector_db_names[:]
     except (ValueError, RuntimeError) as e:
         st.sidebar.error(str(e))
         loaded_stores = {}
         query_source_configs = []
         available_source_names = []
         available_source_groups = []
-        source_groups_map = {}
+        source_groups_map_norm = {}
 
 st.subheader("RAG Query")
 
@@ -732,22 +768,14 @@ with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
 if vector_db_names:
 
     # --- Source Groups (top-level filter: pdf / csv / json / html / url) ---
-    # Only present known/expected source group types in the dropdown to avoid
-    # exposing unexpected or invalid group names returned by vector stores.
-    KNOWN_SOURCE_GROUPS = ["pdf", "csv", "json", "html", "url"]
-
     if available_source_groups:
         # Use the canonical known types as the selectable options, but keep
         # sensible defaults based on previous state or what is actually
-        # available in the loaded stores.
-        options = KNOWN_SOURCE_GROUPS
+        # available in the registry.
+        options = sorted(KNOWN_SOURCE_GROUPS)
         # Prefer session-selected groups if they are valid known types,
-        # otherwise prefer groups that are both known and present in stores.
-        default_selection = [
-            g
-            for g in (_selected_source_groups or available_source_groups)
-            if g in options
-        ]
+        # otherwise prefer groups that are both known and present in the registry.
+        default_selection = [g for g in (_selected_source_groups or available_source_groups) if g in options]
         if not default_selection:
             default_selection = [g for g in options if g in available_source_groups] or options[:]
 
@@ -759,12 +787,19 @@ if vector_db_names:
             help="Select document type(s) to search within.",
         )
 
-        # Filter available documents to only those in selected groups
-        group_filtered_stores = filter_stores_by_source_groups(loaded_stores, selected_source_groups)
-        filtered_doc_names = sorted(group_filtered_stores.keys())
+        # Filter available documents to only those in selected groups using the
+        # normalized registry map so casing differences don't hide items.
+        if selected_source_groups:
+            allowed_names: set[str] = set()
+            for g in selected_source_groups:
+                allowed_names.update(source_groups_map_norm.get(str(g).lower().strip(), []))
+            group_filtered_names = [name for name in available_source_names if name in allowed_names]
+        else:
+            group_filtered_names = available_source_names[:]
+        filtered_doc_names = sorted(group_filtered_names)
     else:
         selected_source_groups = []
-        filtered_doc_names = available_source_names
+        filtered_doc_names = available_source_names or vector_db_names[:]
 
     # --- Query Vector Documents (filtered by source groups) ---
     selected_query_vector_dbs = st.multiselect(
@@ -785,12 +820,11 @@ if vector_db_names:
 
     # -- Submit and answer ------------------------------------------------------
     if submit_clicked and question:
-        if not query_source_configs:
-            st.error("No vector database sources are available. Please load vector databases first.")
-        elif not selected_query_vector_dbs:
+        if not selected_query_vector_dbs:
             st.error("Select at least one document before submitting a question.")
         else:
-            active_configs = [c for c in query_source_configs if c.name in selected_query_vector_dbs]
+            active_stores = load_vector_stores_for_query(selected_query_vector_dbs, source_vector_stores, embeddings)
+            active_configs = build_query_source_configs(active_stores, group_by="vector_db")
             if not active_configs:
                 st.error("The selected documents are not available. Please re-select.")
             else:
@@ -887,8 +921,12 @@ if agent_submit and agent_rag_query.strip():
             st.session_state["agent_response"] = result["response"]
             if result.get("publication"):
                 st.session_state["agent_publication"] = result["publication"]
+            if result.get("trace"):
+                st.session_state["agent_trace"] = result["trace"]
         else:
             st.session_state["agent_response"] = f"Agent error: {result['error']}"
+            if result.get("trace"):
+                st.session_state["agent_trace"] = result["trace"]
 
 # ---------------------------------------------------------------------------
 # -- Shared output box (Agents + RAG) --------------------------------------
@@ -911,6 +949,9 @@ with st.expander("Communication Output", expanded=True):
     with agent_tab:
         agent_response = st.session_state.get("agent_response")
         agent_publication = st.session_state.get("agent_publication")
+        agent_trace = st.session_state.get("agent_trace")
+        if st.button("Refresh Agent Response", key="refresh_agent_response_btn", use_container_width=True):
+            st.rerun()
         if agent_response or agent_publication:
             # If a publication file exists, offer to view it inline
             if agent_publication:
@@ -934,5 +975,8 @@ with st.expander("Communication Output", expanded=True):
             if agent_response:
                 with st.expander("Raw Agent Response", expanded=not bool(agent_publication)):
                     render_response_output(agent_response, "Markdown", panel_key="agent_response_tab")
+            if agent_trace:
+                with st.expander("LLM Trace", expanded=False):
+                    st.text(agent_trace)
         else:
             st.info("Run an agent in the Agent Workflows section above to see results here.")

@@ -11,6 +11,8 @@ and agent framework.  It consolidates:
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import logging
 import os
 from pathlib import Path
@@ -413,6 +415,7 @@ def build_agent_llm_config(
         Model identifier (e.g. ``"llama3.1"``, ``"openai/gpt-4o"``).
     """
     cfg = get_provider_config(provider)
+    timeout_seconds = int(os.getenv("FIN_AGENT_TIMEOUT_SECONDS", "600"))
 
     if provider == "github":
         return {
@@ -420,7 +423,7 @@ def build_agent_llm_config(
                 {"model": model, "base_url": github_endpoint, "api_key": github_token}
             ],
             "temperature": 0,
-            "timeout": 120,
+            "timeout": timeout_seconds,
         }
     elif provider == "proxied_github":
         return {
@@ -428,7 +431,7 @@ def build_agent_llm_config(
                 {"model": model, "base_url": github_endpoint, "api_key": ""}
             ],
             "temperature": 0,
-            "timeout": 120,
+            "timeout": timeout_seconds,
         }
     elif provider in ("deepseek", "proxied_deepseek"):
         return {
@@ -436,7 +439,7 @@ def build_agent_llm_config(
                 {"model": model, "base_url": deepseek_base_url, "api_key": deepseek_token}
             ],
             "temperature": 0,
-            "timeout": 120,
+            "timeout": timeout_seconds,
         }
     else:
         base = (ollama_base_url or OLLAMA_BASE_URL).rstrip("/")
@@ -456,7 +459,7 @@ def build_agent_llm_config(
                 }
             ],
             "temperature": 0,
-            "timeout": 120,
+            "timeout": timeout_seconds,
         }
 
 
@@ -508,6 +511,8 @@ def run_agent_task(
     from fin_ai.agents import SingleAssistantRAG, SingleAssistant, init_engine
     from fin_ai.agents.engine_bridge import publish_research_report
 
+    max_consecutive_auto_reply = int(os.getenv("FIN_AGENT_MAX_CONSECUTIVE_AUTO_REPLY", "12"))
+
     _github_token_for_bridge = (
         os.environ.get("GITHUB_TOKEN") or ""
         if chat_provider in ("github",)
@@ -537,13 +542,22 @@ def run_agent_task(
         ),
     }
 
+    def _strip_terminate_marker(text: str) -> str:
+        cleaned = text.strip()
+        if cleaned.endswith("TERMINATE"):
+            cleaned = cleaned[: -len("TERMINATE")].rstrip()
+        return cleaned
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+
     try:
         if is_publisher:
             agent = SingleAssistant(
                 agent_name,
                 llm_config=llm_config,
                 human_input_mode="NEVER",
-                max_consecutive_auto_reply=8,
+                max_consecutive_auto_reply=max_consecutive_auto_reply,
                 code_execution_config=False,
             )
             # Append publishing instruction
@@ -559,14 +573,15 @@ def run_agent_task(
                 agent_name,
                 llm_config=llm_config,
                 human_input_mode="NEVER",
-                max_consecutive_auto_reply=8,
+                max_consecutive_auto_reply=max_consecutive_auto_reply,
                 code_execution_config=False,
                 retrieve_config=_retrieve_config,
                 rag_description="Query local FAISS vector stores for financial context.",
             )
             full_prompt = prompt
 
-        agent.chat(full_prompt)
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            agent.chat(full_prompt)
 
         # Extract last message
         history = agent.user_proxy.chat_messages
@@ -581,7 +596,7 @@ def run_agent_task(
         if is_publisher:
             try:
                 pub_result = publish_research_report(
-                    content=response or prompt,
+                    content=_strip_terminate_marker(response) or prompt,
                     title=f"{agent_name} Report",
                     format=publisher_format,
                     email=publisher_email,
@@ -594,6 +609,7 @@ def run_agent_task(
             "agent_name": agent_name,
             "success": True,
             "publication": pub_result,
+            "trace": (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip(),
         }
 
     except openai.APIConnectionError as exc:
@@ -607,6 +623,7 @@ def run_agent_task(
                 f"Check that your model endpoint is running and reachable. "
                 f"Details: {exc}"
             ),
+            "trace": (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip(),
         }
     except Exception as exc:
         logger.exception("Agent task '%s' failed", agent_name)
@@ -615,6 +632,7 @@ def run_agent_task(
             "agent_name": agent_name,
             "success": False,
             "error": str(exc),
+            "trace": (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip(),
         }
 
 
