@@ -519,14 +519,28 @@ if vector_db_names:
         if not df_sources.empty and on_disk_stores:
             df_on_disk = df_sources[df_sources["name"].isin(on_disk_stores)].copy()
             if not df_on_disk.empty:
-                st.sidebar.dataframe(
-                    df_on_disk[["name", "source_type", "chunk_count", "embedding_model"]],
-                    use_container_width=True,
-                    hide_index=True,
+                # Only display known source types to avoid confusing/invalid
+                # entries that may have been recorded with an unexpected
+                # source_type value. Normalize to lowercase/trimmed strings
+                # so variants like 'PDF' or ' pdf ' are handled.
+                KNOWN_SOURCE_GROUPS = ["pdf", "csv", "json", "html", "url"]
+                # Create a normalized column for comparison but keep the
+                # original values for display.
+                df_on_disk = df_on_disk.assign(
+                    _source_type_norm=df_on_disk["source_type"].astype(str).str.lower().str.strip()
                 )
-                total = len(df_on_disk)
-                total_chunks = df_on_disk["chunk_count"].sum()
-                st.sidebar.caption(f"{total} FAISS index(es) · {int(total_chunks):,} chunk(s)")
+                df_on_disk_known = df_on_disk[df_on_disk["_source_type_norm"].isin(KNOWN_SOURCE_GROUPS)].copy()
+                if not df_on_disk_known.empty:
+                    st.sidebar.dataframe(
+                        df_on_disk_known[["name", "source_type", "chunk_count", "embedding_model"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    total = len(df_on_disk_known)
+                    total_chunks = df_on_disk_known["chunk_count"].sum()
+                    st.sidebar.caption(f"{total} FAISS index(es) · {int(total_chunks):,} chunk(s)")
+                else:
+                    st.sidebar.caption("No registered RAG sources with known source types found. Consider syncing or re-registering sources.")
             else:
                 st.sidebar.caption("No FAISS index found for registered sources.")
         elif on_disk_stores and df_sources.empty:
@@ -663,6 +677,20 @@ if vector_db_names:
         # Discover source groups (source_type values) from loaded stores
         source_groups_map = discover_source_groups(loaded_stores)
         available_source_groups = sorted(source_groups_map.keys())
+
+        # Restrict available source names to those that belong to known
+        # source groups to avoid presenting unknown/invalid types. Normalize
+        # group keys to lowercase first so 'PDF' and 'pdf' are equivalent.
+        KNOWN_SOURCE_GROUPS = ["pdf", "csv", "json", "html"]
+        valid_names: set[str] = set()
+        for grp_key, names in source_groups_map.items():
+            if str(grp_key).lower().strip() in KNOWN_SOURCE_GROUPS:
+                valid_names.update(names)
+        # If we found known names, filter. If none found, avoid emptying the
+        # available list (fall back to showing everything) to prevent hiding
+        # documents when types are non-standard.
+        if valid_names:
+            available_source_names = [n for n in available_source_names if n in valid_names]
     except (ValueError, RuntimeError) as e:
         st.sidebar.error(str(e))
         loaded_stores = {}
@@ -704,18 +732,33 @@ with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
 if vector_db_names:
 
     # --- Source Groups (top-level filter: pdf / csv / json / html / url) ---
+    # Only present known/expected source group types in the dropdown to avoid
+    # exposing unexpected or invalid group names returned by vector stores.
+    KNOWN_SOURCE_GROUPS = ["pdf", "csv", "json", "html", "url"]
+
     if available_source_groups:
+        # Use the canonical known types as the selectable options, but keep
+        # sensible defaults based on previous state or what is actually
+        # available in the loaded stores.
+        options = KNOWN_SOURCE_GROUPS
+        # Prefer session-selected groups if they are valid known types,
+        # otherwise prefer groups that are both known and present in stores.
+        default_selection = [
+            g
+            for g in (_selected_source_groups or available_source_groups)
+            if g in options
+        ]
+        if not default_selection:
+            default_selection = [g for g in options if g in available_source_groups] or options[:]
+
         selected_source_groups = st.multiselect(
             "Source Groups",
-            available_source_groups,
-            default=(
-                _selected_source_groups
-                if _selected_source_groups
-                else available_source_groups
-            ),
+            options,
+            default=default_selection,
             key="query_source_groups",
             help="Select document type(s) to search within.",
         )
+
         # Filter available documents to only those in selected groups
         group_filtered_stores = filter_stores_by_source_groups(loaded_stores, selected_source_groups)
         filtered_doc_names = sorted(group_filtered_stores.keys())

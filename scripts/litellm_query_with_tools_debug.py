@@ -63,7 +63,7 @@ def _build_completion_args(api_host: str, question: str, system_prompt: str, too
 
     if api_host == "ollama":
         return {
-            "model": f"ollama/{os.getenv('OLLAMA_MODEL', 'llama3.1')}",
+            "model": f"ollama/{os.getenv('OLLAMA_MODEL', 'llama3.2')}",
             "api_base": _normalize_ollama_endpoint(os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434")),
             "messages": [
                 {"role": "system", "content": system_prompt},
