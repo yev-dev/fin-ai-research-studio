@@ -217,7 +217,12 @@ def create_embeddings(
         logger.debug("Embeddings: no GitHub API key provided; proceeding without Authorization header")
 
     if provider == "ollama":
-        return _create_ollama_embeddings(model, resolved_base)
+        logger.debug("Creating Ollama embeddings: model=%s base_url=%s", model, resolved_base)
+        try:
+            return _create_ollama_embeddings(model, resolved_base)
+        except Exception as exc:
+            logger.exception("Failed to create Ollama embeddings for base_url=%s", resolved_base)
+            raise
 
     if provider in ("github", "deepseek"):
         return _GitHubEmbeddings(model=model, endpoint=resolved_base, token=resolved_key)

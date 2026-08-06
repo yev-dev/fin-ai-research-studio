@@ -99,7 +99,7 @@ _PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
     "ollama": ProviderConfig(
         label="Local Ollama",
         optional_params=("api_base", "proxy_port"),
-        default_base_url="http://192.168.1.188:11434",
+        default_base_url="http://192.168.1.141:11434",
         model_format="ollama/{model}",
     ),
     "github": ProviderConfig(

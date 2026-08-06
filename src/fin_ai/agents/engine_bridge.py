@@ -166,7 +166,15 @@ def _ensure_initialised(
                 _w.warn(f"Skipping vector store '{db_name}': {exc}")
             except Exception as exc:
                 import warnings as _w
-                _w.warn(f"Failed to load vector store '{db_name}': {exc}")
+                msg = f"Failed to load vector store '{db_name}': {exc}"
+                exc_text = str(exc).lower()
+                emb_base_text = str(emb_base or "").lower()
+                if "ollama" in emb_base_text or "ollama" in exc_text or "failed to connect" in exc_text or "connection refused" in exc_text:
+                    msg += (
+                        " Please check that Ollama is downloaded, running and accessible: https://ollama.com/download"
+                        " — or configure a different embedding provider via DEFAULT_EMBEDDINGS_PROVIDER or OLLAMA_ENDPOINT."
+                    )
+                _w.warn(msg)
 
         # Rebuild source configs only from successfully loaded stores
         _state.source_configs = build_query_source_configs(

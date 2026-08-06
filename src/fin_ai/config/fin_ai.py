@@ -35,11 +35,13 @@ if _env_file.exists():
 _vector_db_env = os.environ.get("VECTOR_DB_DIR", "").strip()
 VECTOR_DB_DIR = _vector_db_env or str(PROJECT_ROOT / "vector_db")
 PUBLISHED_RESEARCH_DIR = PROJECT_ROOT / "published_research"
+LOG_DIR = PROJECT_ROOT / "logs"
 QUESTION_HISTORY_DIR = Path(VECTOR_DB_DIR) / "question_history"
 
 os.makedirs(VECTOR_DB_DIR, exist_ok=True)
 os.makedirs(QUESTION_HISTORY_DIR, exist_ok=True)
 os.makedirs(PUBLISHED_RESEARCH_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Yahoo Finance service mode
@@ -57,7 +59,7 @@ YAHOO_DATA_DIR = os.environ.get(
 # Provider endpoints
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://192.168.1.188:11434").rstrip("/")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://127.0.0.1:11434").rstrip("/")
 GITHUB_BASE_URL = "https://models.github.ai/inference"
 GITHUB_EMBEDDING_BASE_URL = "https://models.github.ai/inference"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"

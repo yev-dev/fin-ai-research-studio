@@ -264,12 +264,35 @@ class RAGSourceStore:
         stores = discover_vector_stores_by_source(self._dir)
 
         for name, faiss_path in stores.items():
-            if name in self._sources:
+            # Canonicalize names so legacy entries like ``NVDA_report.faiss``
+            # are treated as ``NVDA_report``.
+            canonical_name = str(name).removesuffix(".faiss")
+            legacy_name = f"{canonical_name}.faiss"
+
+            if canonical_name in self._sources:
                 continue  # already tracked
 
-            emb_meta = load_embedding_metadata(name)
+            # Migrate a legacy suffixed registry entry if present.
+            if legacy_name in self._sources:
+                legacy_source = self._sources.pop(legacy_name)
+                self._sources[canonical_name] = RAGSource(
+                    name=canonical_name,
+                    source_type=(legacy_source.source_type or "unknown").strip().lower() or "unknown",
+                    filename=(legacy_source.filename or canonical_name).removesuffix(".faiss"),
+                    file_size=legacy_source.file_size,
+                    chunk_count=legacy_source.chunk_count,
+                    embedding_provider=legacy_source.embedding_provider,
+                    embedding_model=legacy_source.embedding_model,
+                    embedding_base_url=legacy_source.embedding_base_url,
+                    created_at=legacy_source.created_at,
+                    updated_at=datetime.now().isoformat(),
+                )
+                self._save()
+                continue
+
+            emb_meta = load_embedding_metadata(canonical_name)
             source_type = "unknown"
-            filename = name
+            filename = canonical_name
             file_size = 0
             chunk_count = 0
 
@@ -300,14 +323,14 @@ class RAGSourceStore:
                             doc = vs.docstore.search(doc_ids[0])
                             if doc and hasattr(doc, "metadata"):
                                 md = doc.metadata
-                                source_type = md.get("source_type", "unknown")
-                                filename = md.get("filename", name)
+                                source_type = str(md.get("source_type", "unknown")).strip().lower() or "unknown"
+                                filename = str(md.get("filename", canonical_name)).removesuffix(".faiss")
                                 file_size = md.get("file_size", 0)
                 except Exception:
                     pass
 
             self.add_from_metadata(
-                name=name,
+                name=canonical_name,
                 source_type=source_type,
                 filename=filename,
                 file_size=file_size,
@@ -846,12 +869,15 @@ def discover_vector_stores_by_source(vector_db_dir: str | Path = None) -> dict[s
     # Look for vector stores in source subdirectories (new structure)
     for source_dir in vector_db_dir.iterdir():
         if source_dir.is_dir() and not source_dir.name.startswith('.'):
+            # Canonicalize the source name so grouped stores like
+            # ``vector_db/NVDA_report.faiss/`` are exposed as ``NVDA_report``.
+            source_name = source_dir.name.removesuffix('.faiss')
             # Look for .faiss files in subdirectory
             faiss_files = list(source_dir.glob("*.faiss"))
             if faiss_files:
                 # Use the first .faiss file found (or "store.faiss" by convention)
                 store_path = next((f for f in faiss_files if f.name == "store.faiss"), faiss_files[0])
-                sources[source_dir.name] = store_path
+                sources[source_name] = store_path
     
     # Legacy: also look for top-level .faiss directories (backward compatibility)
     for item in vector_db_dir.iterdir():

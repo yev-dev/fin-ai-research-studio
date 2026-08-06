@@ -35,20 +35,9 @@ for pattern in WARNING_PATTERNS:
 
 import streamlit as st
 import streamlit.components.v1 as components
+import requests
 from langchain_community.vectorstores import FAISS
 
-from dashboard import (
-    DEFAULT_GITHUB_MODEL,
-    DEFAULT_GITHUB_EMBEDDING_MODEL,
-    GITHUB_EMBEDDING_BASE_URL,
-    DEFAULT_DEEPSEEK_MODEL,
-    DEEPSEEK_BASE_URL,
-    DEFAULT_CHAT_MODEL,
-    DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_EMBEDDINGS_PROVIDER,
-    OLLAMA_BASE_URL,
-    VECTOR_DB_DIR,
-)
 from dashboard.utils import (
     execute_python_code,
     extract_python_code,
@@ -56,34 +45,44 @@ from dashboard.utils import (
     render_csv_thumbnail,
     sanitize_generated_python_code,
 )
-from fin_ai.core.embeddings import create_embeddings
-from fin_ai.core.processor import (
+from dashboard.financial_analyst_app import (
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_DEEPSEEK_MODEL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDINGS_PROVIDER,
+    DEFAULT_GITHUB_EMBEDDING_MODEL,
+    DEFAULT_GITHUB_MODEL,
+    DEEPSEEK_BASE_URL,
+    GITHUB_EMBEDDING_BASE_URL,
+    OLLAMA_BASE_URL,
+    VECTOR_DB_DIR,
     SUPPORTED_UPLOAD_TYPES,
+    RESEARCH_ANALYSIS,
+    agent_library,
     answer_question,
+    build_agent_llm_config,
     build_query_source_configs,
     clear_history,
+    create_embeddings,
     discover_source_groups,
     fetch_models,
     filter_stores_by_source_groups,
-    # find_source_document,
+    format_source_citations,
+    get_provider_config,
     get_source_vector_stores,
     get_vector_db_names,
+    known_providers,
+    load_embedding_metadata,
     load_history,
     load_vector_stores_for_query,
     process_uploaded_document,
     purge_vector_db,
-    save_history_entry,
-    build_agent_llm_config,
     run_agent_task,
+    save_history_entry,
+    _describe_published_document,
+    _load_published_documents,
+    _mime_for_published_document,
 )
-from fin_ai.core.providers import list_models
-from fin_ai.core.query import format_source_citations
-from fin_ai.core.rag import load_embedding_metadata
-from fin_ai.core.request import known_providers, get_provider_config
-from fin_ai.agents.prompts_library import RESEARCH_ANALYSIS
-
-# Agent library for sidebar listing
-from fin_ai.agents.agent_library import library as agent_library
 
 st.set_page_config(page_title="Financial Data Analysis", layout="wide")
 SIDEBAR_PREVIEW_WIDTH = 320
@@ -93,6 +92,54 @@ def _looks_like_embedding_model(model_id: str) -> bool:
     """Heuristic filter for embedding-capable model identifiers."""
     mid = (model_id or "").strip().lower()
     return "embedding" in mid or "embed" in mid
+
+
+def _render_published_documents_window() -> None:
+    published_documents = _load_published_documents()
+
+    with st.expander(f"Published Research Documents ({len(published_documents)})", expanded=False):
+        left_col, right_col = st.columns([5, 1])
+        left_col.caption(
+            "Published reports saved in the workspace. Download saves a local copy."
+        )
+        if right_col.button("Refresh", key="refresh_published_documents", width="stretch"):
+            st.rerun()
+
+        if not published_documents:
+            st.info("No published research documents found yet.")
+            return
+
+        st.caption("Scroll down to review older reports.")
+        header_cols = st.columns([3.4, 5.6, 1.4])
+        header_cols[0].markdown("**Document**")
+        header_cols[1].markdown("**Short Description**")
+        header_cols[2].markdown("**Download**")
+
+        for index, document in enumerate(published_documents):
+            row_cols = st.columns([3.4, 5.6, 1.4])
+            document_path = document["path"]
+            assert isinstance(document_path, Path)
+            document_title = str(document["title"])
+            document_description = str(document["description"])
+            document_filename = str(document["filename"])
+            document_bytes = document_path.read_bytes()
+
+            row_cols[0].markdown(
+                f"<span style='font-size:0.88rem; font-weight:600;'>{document_title}</span>",
+                unsafe_allow_html=True,
+            )
+            row_cols[1].markdown(
+                f"<span style='font-size:0.84rem; color: #555;'>{document_description}</span>",
+                unsafe_allow_html=True,
+            )
+            row_cols[2].download_button(
+                "Download",
+                data=document_bytes,
+                file_name=document_filename,
+                mime=str(document["mime"]),
+                key=f"download_published_{index}_{document_filename}",
+                width="stretch",
+            )
 
 # ---------------------------------------------------------------------------
 # Cached helpers
@@ -307,12 +354,15 @@ st.sidebar.caption(
 
 # Build provider label→key mapping from ProviderConfig
 _all_cfgs = known_providers()
-provider_label_to_key = {cfg.label: name for name, cfg in _all_cfgs.items()}
+provider_options = [(cfg.label, name) for name, cfg in _all_cfgs.items()]
+provider_label_to_key = dict(provider_options)
 default_provider = os.getenv("DEFAULT_PROVIDER", "ollama").strip().lower()
-provider_labels = list(provider_label_to_key.keys())
-default_provider_index = next(
-    (i for i, k in enumerate(provider_labels) if provider_label_to_key[k] == default_provider), 0,
-)
+provider_labels = [label for label, _ in provider_options]
+default_provider_index = 0
+for index, (_, provider_key) in enumerate(provider_options):
+    if provider_key == default_provider:
+        default_provider_index = index
+        break
 selected_provider_label = st.sidebar.selectbox("Select Provider", provider_labels, index=default_provider_index, key="chat_provider")
 selected_provider = provider_label_to_key[selected_provider_label]
 _pcfg = get_provider_config(selected_provider)
@@ -433,10 +483,15 @@ st.sidebar.caption(
     "and when retrieving relevant context during querying."
 )
 
-embeddings_provider_label_to_key = {"Local Ollama": "ollama", "GitHub Models": "github"}
+embeddings_provider_options = [("Local Ollama", "ollama"), ("GitHub Models", "github")]
+embeddings_provider_label_to_key = dict(embeddings_provider_options)
 default_emb_provider = os.getenv("DEFAULT_EMBEDDINGS_PROVIDER", DEFAULT_EMBEDDINGS_PROVIDER).strip().lower()
-emb_labels = list(embeddings_provider_label_to_key.keys())
-default_emb_idx = next((i for i, k in enumerate(emb_labels) if embeddings_provider_label_to_key[k] == default_emb_provider), 0)
+emb_labels = [label for label, _ in embeddings_provider_options]
+default_emb_idx = 0
+for index, (_, provider_key) in enumerate(embeddings_provider_options):
+    if provider_key == default_emb_provider:
+        default_emb_idx = index
+        break
 selected_emb_provider_label = st.sidebar.selectbox("Select Embedding Provider", emb_labels, index=default_emb_idx, key="emb_provider_select")
 selected_emb_provider = embeddings_provider_label_to_key[selected_emb_provider_label]
 
@@ -472,6 +527,52 @@ else:
     embeddings_base_url = ollama_emb_endpoint
 
 selected_embedding_model = st.sidebar.selectbox("Select Embedding Model", available_embedding_models_display, index=default_emb_model_idx, key="embedding_model")
+
+# -- Ollama health check: if Ollama is selected for chat or embeddings,
+# probe the local /api/tags endpoint briefly and offer a quick fallback
+# button in the sidebar if unreachable.
+def _is_ollama_reachable(base_url: str, timeout: float = 2.0) -> bool:
+    try:
+        probe_url = f"{str(base_url).rstrip('/')}/api/tags"
+        resp = requests.get(probe_url, timeout=timeout)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+# Compute endpoints and availability only when relevant
+ollama_chat_endpoint = ollama_chat_base_url
+ollama_emb_endpoint = embeddings_base_url if 'ollama' in (selected_emb_provider or '') else None
+ollama_chat_ok = False
+ollama_emb_ok = False
+if selected_provider == 'ollama':
+    try:
+        ollama_chat_ok = _is_ollama_reachable(ollama_chat_endpoint)
+    except Exception:
+        ollama_chat_ok = False
+if selected_emb_provider == 'ollama':
+    try:
+        ollama_emb_ok = _is_ollama_reachable(ollama_emb_endpoint or ollama_chat_endpoint)
+    except Exception:
+        ollama_emb_ok = False
+
+if (selected_provider == 'ollama' and not ollama_chat_ok) or (selected_emb_provider == 'ollama' and not ollama_emb_ok):
+    st.sidebar.warning(
+        'Ollama appears unreachable. Embeddings or model listing may fail.\n'
+        'Ensure Ollama is running locally or switch providers.'
+    )
+    # Provide quick-switch buttons to move to GitHub provider/embeddings
+    provider_key_to_label = {v: k for k, v in provider_label_to_key.items()}
+    github_chat_label = provider_key_to_label.get('github')
+    if github_chat_label and selected_provider == 'ollama':
+        if st.sidebar.button('Switch chat provider to GitHub Models', key='switch_chat_to_github'):
+            st.session_state['chat_provider'] = github_chat_label
+            st.experimental_rerun()
+    # Embeddings fallback
+    if selected_emb_provider == 'ollama':
+        emb_labels = [label for label, _ in [("Local Ollama","ollama"),("GitHub Models","github")] ]
+        if st.sidebar.button('Use GitHub for embeddings', key='switch_emb_to_github'):
+            st.session_state['emb_provider_select'] = 'GitHub Models'
+            st.experimental_rerun()
 
 st.sidebar.divider()
 
@@ -549,7 +650,7 @@ if vector_db_names:
                 if not df_on_disk_known.empty:
                     st.sidebar.dataframe(
                         df_on_disk_known[["name", "source_type", "chunk_count", "embedding_model"]],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                     total = len(df_on_disk_known)
@@ -588,6 +689,40 @@ if vector_db_names:
                 st.rerun()
             else:
                 st.sidebar.warning(f"No files found to purge for '{_purge_db}'.")
+
+        # Reset session: clear engine connections and session state
+        if st.sidebar.button("Reset Session", key="reset_session_btn"):
+            try:
+                from fin_ai.agents.engine_bridge import reset_engine_state
+                reset_engine_state()
+            except Exception:
+                pass
+            # Clear common session keys related to RAG and agents
+            for k in [
+                "agent_response",
+                "agent_publication",
+                "agent_trace",
+                "latest_response",
+                "latest_retrieval",
+                "question_history",
+                "history_vector_db",
+                "agent_prompt_main",
+                "agent_prompt_asset_main",
+                "query_vector_dbs",
+            ]:
+                st.session_state.pop(k, None)
+            # Try to clear Streamlit caches (best-effort)
+            try:
+                st.cache_data.clear()
+            except Exception:
+                try:
+                    st.experimental_memo.clear()
+                except Exception:
+                    pass
+            st.success("Session reset: engine state and session variables cleared.")
+            st.rerun()
+
+    _render_published_documents_window()
 
 # -- Agents (main panel) ---------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -651,9 +786,9 @@ with st.expander("Prompt Controls", expanded=True):
 
 agent_col_a, agent_col_b, agent_col_c = st.columns([1, 1, 3])
 with agent_col_a:
-    agent_submit = st.button(" Run Agent", key="run_agent_main", type="primary", use_container_width=True)
+    agent_submit = st.button(" Run Agent", key="run_agent_main", type="primary", width="stretch")
 with agent_col_b:
-    if st.button("Clear Output", key="clear_agent_main", use_container_width=True):
+    if st.button("Clear Output", key="clear_agent_main", width="stretch"):
         st.session_state.pop("agent_response", None)
         st.session_state.pop("agent_publication", None)
         st.session_state.pop("latest_response", None)
@@ -891,42 +1026,55 @@ if vector_db_names:
 # -- Agent execution & display ---------------------------------------------
 # ---------------------------------------------------------------------------
 
-if agent_submit and agent_rag_query.strip():
-    with st.spinner(f"Running {selected_agent} agent..."):
-        # For proxied providers, don't pass token (proxy handles auth)
-        _effective_gh_token = github_token if selected_provider == "github" else ""
-        _effective_ds_token = deepseek_token if selected_provider == "deepseek" else ""
-        agent_llm_config = build_agent_llm_config(
-            provider=selected_provider,
-            model=selected_model,
-            ollama_base_url=ollama_chat_base_url,
-            github_endpoint=github_endpoint,
-            github_token=_effective_gh_token,
-            deepseek_base_url=deepseek_base_url,
-            deepseek_token=_effective_ds_token,
-        )
-        result = run_agent_task(
-            agent_name=selected_agent,
-            prompt=agent_rag_query.strip(),
-            llm_config=agent_llm_config,
-            embedding_model=selected_embedding_model,
-            embedding_provider=selected_emb_provider,
-            embedding_base_url=embeddings_base_url,
-            chat_provider=selected_provider,
-            is_publisher=(selected_agent == "Research_Publisher"),
-            publisher_format=agent_format,
-            publisher_email=agent_email.strip(),
-        )
-        if result["success"]:
-            st.session_state["agent_response"] = result["response"]
-            if result.get("publication"):
-                st.session_state["agent_publication"] = result["publication"]
-            if result.get("trace"):
-                st.session_state["agent_trace"] = result["trace"]
-        else:
-            st.session_state["agent_response"] = f"Agent error: {result['error']}"
-            if result.get("trace"):
-                st.session_state["agent_trace"] = result["trace"]
+effective_agent_prompt = agent_rag_query.strip()
+if not effective_agent_prompt and selected_agent == "Research_Analyst":
+    effective_agent_prompt = RESEARCH_ANALYSIS["Single Asset Analysis"].format(
+        asset=agent_prompt_asset.strip() or "NVDA"
+    )
+elif not effective_agent_prompt and selected_agent == "Research_Publisher":
+    effective_agent_prompt = RESEARCH_ANALYSIS["Single Asset Analysis and Publish Report"].format(
+        asset=agent_prompt_asset.strip() or "NVDA"
+    )
+
+if agent_submit:
+    if not effective_agent_prompt:
+        st.error("Enter an agent task prompt before running the agent.")
+    else:
+        with st.spinner(f"Running {selected_agent} agent..."):
+            # For proxied providers, don't pass token (proxy handles auth)
+            _effective_gh_token = github_token if selected_provider == "github" else ""
+            _effective_ds_token = deepseek_token if selected_provider == "deepseek" else ""
+            agent_llm_config = build_agent_llm_config(
+                provider=selected_provider,
+                model=selected_model,
+                ollama_base_url=ollama_chat_base_url,
+                github_endpoint=github_endpoint,
+                github_token=_effective_gh_token,
+                deepseek_base_url=deepseek_base_url,
+                deepseek_token=_effective_ds_token,
+            )
+            result = run_agent_task(
+                agent_name=selected_agent,
+                prompt=effective_agent_prompt,
+                llm_config=agent_llm_config,
+                embedding_model=selected_embedding_model,
+                embedding_provider=selected_emb_provider,
+                embedding_base_url=embeddings_base_url,
+                chat_provider=selected_provider,
+                is_publisher=(selected_agent == "Research_Publisher"),
+                publisher_format=agent_format,
+                publisher_email=agent_email.strip(),
+            )
+            if result["success"]:
+                st.session_state["agent_response"] = result["response"]
+                if result.get("publication"):
+                    st.session_state["agent_publication"] = result["publication"]
+                if result.get("trace"):
+                    st.session_state["agent_trace"] = result["trace"]
+            else:
+                st.session_state["agent_response"] = f"Agent error: {result['error']}"
+                if result.get("trace"):
+                    st.session_state["agent_trace"] = result["trace"]
 
 # ---------------------------------------------------------------------------
 # -- Shared output box (Agents + RAG) --------------------------------------
@@ -950,7 +1098,7 @@ with st.expander("Communication Output", expanded=True):
         agent_response = st.session_state.get("agent_response")
         agent_publication = st.session_state.get("agent_publication")
         agent_trace = st.session_state.get("agent_trace")
-        if st.button("Refresh Agent Response", key="refresh_agent_response_btn", use_container_width=True):
+        if st.button("Refresh Agent Response", key="refresh_agent_response_btn", width="stretch"):
             st.rerun()
         if agent_response or agent_publication:
             # If a publication file exists, offer to view it inline

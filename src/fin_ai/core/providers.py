@@ -55,7 +55,7 @@ def list_ollama_models(
 
     Uses Ollama's ``/api/tags`` endpoint to retrieve the list of pulled models.
     """
-    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://192.168.1.188:11434")).rstrip("/")
+    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://192.168.1.141:11434")).rstrip("/")
     url = f"{endpoint}/api/tags"
 
     try:
@@ -69,20 +69,37 @@ def list_ollama_models(
         logger.warning("Failed to list Ollama models from %s: %s", url, exc)
         return []
 
-    models = payload.get("models", [])
-    if not models:
-        logger.info("Ollama returned an empty model list at %s", url)
-        return []
+    # Ollama responses may vary across versions. Try to extract model names
+    # from common shapes: {'models': [...]}, {'tags': [...]}, or a plain list.
+    candidates = []
+    if isinstance(payload, dict):
+        if "models" in payload and isinstance(payload["models"], list):
+            candidates = payload["models"]
+        elif "tags" in payload and isinstance(payload["tags"], list):
+            candidates = payload["tags"]
+        else:
+            # Some Ollama variants return a dict of model-name -> metadata
+            # or a list under other keys; fall back to any list values.
+            for v in payload.values():
+                if isinstance(v, list):
+                    candidates = v
+                    break
+    elif isinstance(payload, list):
+        candidates = payload
 
-    return [
-        ModelInfo(
-            id=model.get("name", ""),
-            name=model.get("name", ""),
-            provider="ollama",
-        )
-        for model in models
-        if model.get("name")
-    ]
+    models: list[ModelInfo] = []
+    for item in candidates:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("model") or item.get("id")
+            if name:
+                models.append(ModelInfo(id=str(name), name=str(name), provider="ollama"))
+        elif isinstance(item, str):
+            models.append(ModelInfo(id=item, name=item, provider="ollama"))
+
+    if not models:
+        logger.info("Ollama returned no models at %s (raw payload shape: %s)", url, type(payload).__name__)
+
+    return models
 
 
 def list_github_models(
@@ -111,22 +128,37 @@ def list_github_models(
         logger.warning("Failed to list GitHub models: %s", exc)
         return []
 
-    if not isinstance(payload, list):
-        logger.warning("Unexpected GitHub models response type: %s", type(payload).__name__)
-        return []
+    # GitHub catalog may return a list or a dict with nested lists. Try to
+    # extract all candidate model ids from common shapes.
+    candidates: list[Any] = []
+    if isinstance(payload, list):
+        candidates = payload
+    elif isinstance(payload, dict):
+        # Common patterns: {'data': [...]} or {'models': [...]} or direct mapping
+        for key in ("data", "models", "models_catalog", "items"):
+            if key in payload and isinstance(payload[key], list):
+                candidates = payload[key]
+                break
+        if not candidates:
+            # Fallback: collect first list value
+            for v in payload.values():
+                if isinstance(v, list):
+                    candidates = v
+                    break
 
     model_ids = sorted(
         {
-            str(item.get("id", "")).strip()
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
+            str(item.get("id", item.get("model", item.get("name", "")).strip()))
+            for item in candidates
+            if isinstance(item, dict) and (item.get("id") or item.get("model") or item.get("name"))
         }
     )
 
-    return [
-        ModelInfo(id=mid, name=mid, provider="github")
-        for mid in model_ids
-    ]
+    # Also accept plain-string lists
+    if not model_ids and isinstance(candidates, list) and all(isinstance(i, str) for i in candidates):
+        model_ids = sorted({str(i).strip() for i in candidates if i})
+
+    return [ModelInfo(id=mid, name=mid, provider="github") for mid in model_ids]
 
 
 DEEPSEEK_KNOWN_MODELS = [
