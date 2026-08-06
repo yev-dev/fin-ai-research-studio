@@ -59,6 +59,7 @@ RESEARCH_ANALYSIS = {
 
         - Snapshot → extract key metrics.
         - Price series → compute returns/volatility/trends.
+        - RAG search → provide summary.
         - RAG search → collect citations.
         - If requested, call publish_research_report(...) and include returned filepath.
 

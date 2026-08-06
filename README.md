@@ -40,6 +40,56 @@ with each other and with the local RAG infrastructure.
 
 ![Agent Architecture](docs/images/agents.png)
 
+### Prompt and Thematic Investment
+
+The following prompt is used link RAG document with latest market data
+
+```
+
+  You are a Research Analyst with Market Data expertise.
+
+        Task
+        Analyze the asset {asset} and produce a publication-ready research note. Use the tools listed below to fetch live market data, integrate results with local RAG context, annotate claims with citations, include raw tool output in the appendix, and call the publisher at the end.
+
+        Tools:
+
+        - get_financial_snapshot(symbol="{asset}"): key fundamentals & anomalies (revenue, EPS, margins, growth, leverage, liquidity).
+        - get_stock_data(symbol="{asset}", start_date, end_date): 1Y price, returns, drawdowns, volatility, 30/90-day trends.
+        - query_local_rag(query="..."): supporting documents — use inline citations.
+        - Optional: get_company_info, get_income_stmt, get_balance_sheet, get_cash_flow.
+
+        Workflow (order):
+
+        - Snapshot → extract key metrics.
+        - Price series → compute returns/volatility/trends.
+        - RAG search → collect citations.
+        - If requested, call publish_research_report(...) and include returned filepath.
+
+        Report (exact headings):
+
+        - Executive Summary
+        - Key Metrics Snapshot
+        - Recent Price & Volatility Summary
+        - Drivers & Catalysts
+        - Risks & Red Flags
+        - Valuation / Quick Checks
+        - Recommendation and Rationale
+        - Appendix — Tool outputs & RAG sources
+
+        Output rules:
+
+        Return human report (Markdown/HTML).
+        Inline-annotate claims with citations. Note any failed/partial tool calls.
+        End response with TERMINATE.
+
+```
+
+Published dcoument
+
+
+[NVIDIA (NVDA) — Research Note](docs/images/NVIDIA_Research_Note.pdf)
+
+
 ### Agent Library
 
 | Agent | Role | Key Tools |
@@ -50,6 +100,8 @@ with each other and with the local RAG infrastructure.
 | **Thematic_Investor** | Theme-based evaluation (AI, energy transition) | Financials + RAG + thematic scoring |
 | **Research_Publisher** | Format, publish, and distribute research | `publish_research_html`, `publish_research_pdf`, `send_research_email` |
 | **Test_Agent** | Diagnostics and introspection | `list_agent_profiles`, `list_vector_stores`, `get_provider_info` |
+
+
 
 ### How agents work
 
@@ -128,6 +180,8 @@ data/
 ├── MSFT/
 └── ...
 ```
+
+![Agent Architecture](docs/images/query_with_tools.png)
 
 ---
 
