@@ -15,6 +15,7 @@ import warnings
 from hashlib import md5
 from pathlib import Path
 from time import perf_counter
+from datetime import datetime
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -637,6 +638,32 @@ with st.expander("Prompt Controls", expanded=True):
         help="Used to populate the selected prompt template.",
     )
 
+    # Pre-fill research name with a helpful default if not provided
+    default_research_name = st.session_state.get("agent_research_name_main", "")
+    if not default_research_name:
+        date_str = datetime.utcnow().strftime("%Y%m%d")
+        asset_part = (agent_prompt_asset or "").strip() or "asset"
+        default_research_name = f"{selected_agent}*{asset_part}*{date_str}"
+
+    agent_research_name = st.text_input(
+        "Research Name (optional)",
+        value=default_research_name,
+        key="agent_research_name_main",
+        help="Optional title to use when publishing research reports.",
+    )
+
+    # Preview expected generated filename/link for the chosen title
+    def _safe_title_for_filename(title: str) -> str:
+        safe = "".join(c for c in (title or "") if c.isalnum() or c in (" ", "-", "_")).rstrip()
+        return (safe[:80] or "research_report").replace(" ", "_")
+
+    chosen_title = agent_research_name.strip() or f"{selected_agent} Report"
+    preview_prefix = _safe_title_for_filename(chosen_title)
+    preview_ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    preview_ext = agent_format or "html"
+    preview_filename = f"{preview_prefix}_{preview_ts}.{preview_ext}"
+    st.caption(f"Preview filename: {preview_filename}")
+
     if agent_prompt_template != "Custom":
         st.session_state["agent_prompt_main"] = RESEARCH_ANALYSIS[agent_prompt_template].format(
             asset=agent_prompt_asset.strip() or "NVDA"
@@ -916,11 +943,21 @@ if agent_submit and agent_rag_query.strip():
             is_publisher=(selected_agent == "Research_Publisher"),
             publisher_format=agent_format,
             publisher_email=agent_email.strip(),
+            publisher_title=agent_research_name.strip(),
         )
         if result["success"]:
             st.session_state["agent_response"] = result["response"]
             if result.get("publication"):
                 st.session_state["agent_publication"] = result["publication"]
+                # Extract filepath from publication result and store for quick preview/linking
+                try:
+                    _pub = json.loads(result["publication"]) if isinstance(result["publication"], str) else result["publication"]
+                    _pub_info = _pub.get("publish", _pub)
+                    _fp = _pub_info.get("filepath")
+                    if _fp:
+                        st.session_state["agent_publication_filepath"] = _fp
+                except Exception:
+                    pass
             if result.get("trace"):
                 st.session_state["agent_trace"] = result["trace"]
         else:
@@ -949,28 +986,54 @@ with st.expander("Communication Output", expanded=True):
     with agent_tab:
         agent_response = st.session_state.get("agent_response")
         agent_publication = st.session_state.get("agent_publication")
+        agent_publication_filepath = st.session_state.get("agent_publication_filepath")
         agent_trace = st.session_state.get("agent_trace")
         if st.button("Refresh Agent Response", key="refresh_agent_response_btn", use_container_width=True):
             st.rerun()
-        if agent_response or agent_publication:
+        if agent_response or agent_publication or agent_publication_filepath:
             # If a publication file exists, offer to view it inline
-            if agent_publication:
+            # Prefer explicit filepath stored in session state
+            filepath = None
+            if agent_publication_filepath:
+                filepath = agent_publication_filepath
+            elif agent_publication:
                 try:
                     pub_data = json.loads(agent_publication) if isinstance(agent_publication, str) else agent_publication
                     pub_info = pub_data.get("publish", pub_data)
                     filepath = pub_info.get("filepath", "")
-                    if filepath and Path(filepath).exists():
-                        with st.expander("Published Report Preview", expanded=True):
-                            # Link to open in browser
-                            st.markdown(f"**Published:** [`{filepath}`](file://{filepath})")
-                            # Read and render HTML inline
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    filepath = None
+
+            if filepath:
+                if Path(filepath).exists():
+                    with st.expander("Published Report Preview", expanded=True):
+                        # Link to open in browser
+                        st.markdown(f"**Published:** [`{filepath}`](file://{filepath})")
+                        # Read and render HTML inline
+                        try:
                             html_content = Path(filepath).read_text(encoding="utf-8")
                             components.html(html_content, height=800, scrolling=True)
-                    elif filepath:
-                        st.info(f"Report saved at `{filepath}`.")
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    st.caption("Publication Result:")
-                    st.code(agent_publication, language="json")
+                        except Exception:
+                            st.info(f"Report saved at {filepath} (cannot render inline).")
+                            # Download button (serves bytes, MIME-aware)
+                            try:
+                                file_bytes = Path(filepath).read_bytes()
+                                fname = Path(filepath).name
+                                lower = fname.lower()
+                                if lower.endswith(".pdf"):
+                                    mime = "application/pdf"
+                                elif lower.endswith(".html") or lower.endswith(".htm"):
+                                    mime = "text/html"
+                                else:
+                                    mime = "application/octet-stream"
+                                st.download_button("Download report", data=file_bytes, file_name=fname, mime=mime)
+                            except Exception:
+                                pass
+                else:
+                    st.info(f"Report saved at {filepath}.")
+            elif agent_publication:
+                st.caption("Publication Result:")
+                st.code(agent_publication, language="json")
             # Show raw agent response in a collapsible section
             if agent_response:
                 with st.expander("Raw Agent Response", expanded=not bool(agent_publication)):

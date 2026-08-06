@@ -85,6 +85,7 @@ def fetch_models(
     base_url: str = "",
 ) -> list[ModelInfo]:
     """Fetch available models for a provider.  Returns empty list on error."""
+    logger.info("fetch_models: provider=%s", provider)
     kwargs: dict[str, Any] = {}
     if api_key:
         kwargs["api_key"] = api_key
@@ -128,6 +129,7 @@ def process_uploaded_document(
     github_token: str | None = None,
 ) -> dict[str, Any]:
     """Index an uploaded document into a FAISS vector store."""
+    logger.info("process_uploaded_document: filename=%s size=%d", file_name, len(file_binary))
     from hashlib import md5
 
     upload_hash = md5(file_binary).hexdigest()
@@ -199,6 +201,7 @@ def load_vector_stores_for_query(
     embeddings: Any,
 ) -> dict[str, FAISS]:
     """Load FAISS vector stores with dimension sanity checks."""
+    logger.info("load_vector_stores_for_query: selected=%s", selected_vector_db_names)
     import faiss
 
     loaded: dict[str, FAISS] = {}
@@ -326,6 +329,7 @@ def answer_question(
     https_proxy_port: int | None = None,
 ) -> dict[str, Any]:
     """Run a RAG query against the selected vector stores."""
+    logger.info("answer_question: provider=%s question=%s", provider, question)
     start_time = perf_counter()
 
     effective_system = build_tool_aware_system_prompt(system_prompt) if use_tools else system_prompt
@@ -475,6 +479,8 @@ def run_agent_task(
     is_publisher: bool = False,
     publisher_format: str = "html",
     publisher_email: str = "",
+    publisher_title: str = "",
+    **kwargs,
 ) -> dict[str, Any]:
     """Run a single agent task and return the response.
 
@@ -550,8 +556,25 @@ def run_agent_task(
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
+    import uuid
+
+    # Set structured log context for this agent run
+    try:
+        from fin_ai import set_log_context
+    except Exception:
+        set_log_context = None
+
+    request_id = uuid.uuid4().hex
+    if set_log_context:
+        try:
+            set_log_context(request_id=request_id, agent=agent_name)
+        except Exception:
+            pass
 
     try:
+        logger.info(
+            "Communication Output: starting agent run",
+        )
         if is_publisher:
             agent = SingleAssistant(
                 agent_name,
@@ -591,13 +614,41 @@ def run_agent_task(
             msgs = history[last_agent]
             if msgs:
                 response = msgs[-1].get("content", "")
+                # Try to extract LLM raw response (best-effort)
+                raw_obj = None
+                try:
+                    last_msg = msgs[-1]
+                    # Common keys that may contain raw provider response
+                    for key in ("raw_response", "raw", "response", "metadata"):
+                        if isinstance(last_msg, dict) and key in last_msg and last_msg[key]:
+                            raw_obj = last_msg[key]
+                            break
+                    # If metadata is a ResponseMetadata-like object
+                    if raw_obj is None and isinstance(last_msg, dict) and "metadata" in last_msg:
+                        md = last_msg.get("metadata")
+                        if isinstance(md, dict) and md.get("raw_response"):
+                            raw_obj = md.get("raw_response")
+                except Exception:
+                    raw_obj = None
+                if raw_obj is not None:
+                    try:
+                        raw_json = json.dumps(raw_obj, default=lambda o: getattr(o, "__dict__", str(o)), ensure_ascii=False)
+                    except Exception:
+                        raw_json = str(raw_obj)
+                    logger.info("LLM raw_response available", extra={"llm_raw_response": raw_json})
+        # Compose trace and log communication output & agent response
+        trace = (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip()
+        if trace:
+            logger.info("Communication Output (trace): %s", trace)
+        logger.info("Agent Response: %s", response)
 
         pub_result = None
         if is_publisher:
             try:
+                pub_title = publisher_title.strip() or f"{agent_name} Report"
                 pub_result = publish_research_report(
                     content=_strip_terminate_marker(response) or prompt,
-                    title=f"{agent_name} Report",
+                    title=pub_title,
                     format=publisher_format,
                     email=publisher_email,
                 )
@@ -609,7 +660,7 @@ def run_agent_task(
             "agent_name": agent_name,
             "success": True,
             "publication": pub_result,
-            "trace": (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip(),
+            "trace": trace,
         }
 
     except openai.APIConnectionError as exc:
@@ -634,6 +685,13 @@ def run_agent_task(
             "error": str(exc),
             "trace": (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip(),
         }
+    finally:
+        # Clear structured log context
+        try:
+            from fin_ai import clear_log_context
+            clear_log_context()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,9 @@ from fin_ai.config.fin_ai import (
     GITHUB_EMBEDDING_BASE_URL,
 )
 from fin_ai.core.embeddings import create_embeddings
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Core module imports (used by tools below)
 from fin_ai.core.providers import list_models, ModelInfo
@@ -120,6 +123,13 @@ def _ensure_initialised(
     emb_provider = embedding_provider or DEFAULT_EMBEDDINGS_PROVIDER
     emb_base = embedding_base_url or (
         GITHUB_EMBEDDING_BASE_URL if emb_provider == "github" else OLLAMA_BASE_URL
+    )
+
+    logger.info(
+        "Initializing engine bridge (chat_provider=%s, embedding_model=%s, embedding_provider=%s)",
+        chat_provider,
+        emb_model,
+        emb_provider,
     )
 
     # GitHub token is optional for embeddings — proxied providers don't need it
@@ -212,6 +222,7 @@ def query_local_rag(
         Retrieval strategy: ``"ensemble"`` (default, combines all sources),
         ``"separate"`` (per-source), or ``"routed"`` (auto-selects best sources).
     """
+    logger.info("query_local_rag: query=%s retrieval_mode=%s", query, retrieval_mode)
     _ensure_initialised()
 
     if not _state.source_configs:
@@ -289,6 +300,7 @@ def get_provider_info() -> str:
     are resolved for each, and lists all registered provider configs
     with their required and optional parameters.
     """
+    logger.info("get_provider_info called")
     _ensure_initialised()
 
     lines = [
@@ -358,6 +370,7 @@ def get_financial_snapshot(symbol: str) -> str:
     symbol : str
         Stock ticker symbol, e.g. ``"AAPL"``, ``"NVDA"``.
     """
+    logger.info("get_financial_snapshot: symbol=%s", symbol)
     from fin_ai.core.tools import (
         get_stock_info,
         get_company_info,
