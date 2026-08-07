@@ -35,6 +35,7 @@ for pattern in WARNING_PATTERNS:
     warnings.filterwarnings("ignore", message=pattern)
 
 import streamlit as st
+import time
 import streamlit.components.v1 as components
 from langchain_community.vectorstores import FAISS
 
@@ -410,6 +411,58 @@ else:  # ollama
     default_chat_index = display_ollama_models.index(default_chat_model) if default_chat_model in display_ollama_models else 0
     selected_model = st.sidebar.selectbox("Model", display_ollama_models, index=default_chat_index, key="ollama_chat_model")
 
+# Reset session state button
+if st.sidebar.button("Reset Session", key="reset_session_btn"):
+    keys_to_clear = [
+        "agent_response",
+        "agent_publication",
+        "agent_response_debug",
+        "agent_publication_filepath",
+        "agent_trace",
+        "latest_response",
+        "latest_retrieval",
+        "question_history",
+        "agent_research_name_main",
+        "agent_prompt_main",
+        "agent_response_debug",
+    ]
+    for k in keys_to_clear:
+        if k in st.session_state:
+            del st.session_state[k]
+    # Use a safe rerun that works across Streamlit versions
+    def _safe_rerun():
+        try:
+            st.experimental_rerun()
+            return
+        except Exception:
+            pass
+        # Try raising the runtime RerunException used internally by Streamlit
+        RerunException = None
+        try:
+            import importlib
+            mod = importlib.import_module("streamlit.runtime.scriptrunner")
+            RerunException = getattr(mod, "RerunException", None)
+        except Exception:
+            try:
+                import importlib
+                mod2 = importlib.import_module("streamlit.script_runner")
+                RerunException = getattr(mod2, "RerunException", None)
+            except Exception:
+                RerunException = None
+        if RerunException:
+            raise RerunException()
+        # Fallback: tweak query params to force a browser reload
+        try:
+            params = st.experimental_get_query_params() or {}
+            params["_reset"] = int(time.time())
+            st.experimental_set_query_params(**params)
+            return
+        except Exception:
+            # Final fallback: meta refresh
+            st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
+
+    _safe_rerun()
+
 response_type = st.sidebar.selectbox("Select Response Type", ["Plain Text", "Markdown", "Python Code"], index=1, key="response_type")
 auto_truncate_prompt = st.sidebar.checkbox("Auto-truncate prompt (gpt-5 guard)", value=True)
 use_tools = st.sidebar.checkbox("Enable function tools (financial data)", value=False)
@@ -762,139 +815,148 @@ if vector_db_names:
         available_source_groups = []
         source_groups_map_norm = {}
 
-st.subheader("RAG Query")
+# RAG Query
+# Keep the RAG query controls collapsible until the user submits a question
+if "rag_query_expanded" not in st.session_state:
+    st.session_state["rag_query_expanded"] = False
+# Expand if there's a previous response
+rag_expanded = bool(st.session_state.get("rag_query_expanded", False)) or bool(st.session_state.get("latest_response"))
+with st.expander("RAG Query", expanded=rag_expanded):
+    # Upload document inline (always visible — even when vector_db is empty)
+    with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
+        selected_source_type = st.selectbox("Type of Source Document", SUPPORTED_UPLOAD_TYPES, index=0, key="source_type_rag")
+        uploaded_file = st.file_uploader("Upload a document for analysis", type=SUPPORTED_UPLOAD_TYPES, key="upload_rag")
+        if uploaded_file:
+            binary = uploaded_file.getvalue()
+            if st.button("Process Document and Store in Vector DB", key="process_rag"):
+                with st.spinner("Processing document..."):
+                    _gh_tok = os.environ.get("GITHUB_TOKEN", "")
+                    if selected_emb_provider == "github":
+                        try:
+                            _gh_tok = embedding_github_token or _gh_tok
+                        except NameError:
+                            pass
+                    result_upload = process_uploaded_document(
+                        file_binary=binary,
+                        file_name=uploaded_file.name,
+                        embedding_model=selected_embedding_model,
+                        embedding_base_url=embeddings_base_url,
+                        emb_provider=selected_emb_provider,
+                        source_type=selected_source_type,
+                        github_token=_gh_tok if selected_emb_provider == "github" else None,
+                    )
+                    st.success("Document processed and stored in the vector database.")
+                    st.caption(f"Document processing completed in {result_upload['elapsed']:.2f} seconds.")
+                    st.rerun()
 
-# Upload document inline (always visible — even when vector_db is empty)
-with st.expander("Upload New Document", expanded=not bool(vector_db_names)):
-    selected_source_type = st.selectbox("Type of Source Document", SUPPORTED_UPLOAD_TYPES, index=0, key="source_type_rag")
-    uploaded_file = st.file_uploader("Upload a document for analysis", type=SUPPORTED_UPLOAD_TYPES, key="upload_rag")
-    if uploaded_file:
-        binary = uploaded_file.getvalue()
-        if st.button("Process Document and Store in Vector DB", key="process_rag"):
-            with st.spinner("Processing document..."):
-                _gh_tok = os.environ.get("GITHUB_TOKEN", "")
-                if selected_emb_provider == "github":
-                    try:
-                        _gh_tok = embedding_github_token or _gh_tok
-                    except NameError:
-                        pass
-                result_upload = process_uploaded_document(
-                    file_binary=binary,
-                    file_name=uploaded_file.name,
-                    embedding_model=selected_embedding_model,
-                    embedding_base_url=embeddings_base_url,
-                    emb_provider=selected_emb_provider,
-                    source_type=selected_source_type,
-                    github_token=_gh_tok if selected_emb_provider == "github" else None,
-                )
-                st.success("Document processed and stored in the vector database.")
-                st.caption(f"Document processing completed in {result_upload['elapsed']:.2f} seconds.")
-                st.rerun()
+    # --- Source selection & querying (only when stores exist) ---
+    if vector_db_names:
 
-# --- Source selection & querying (only when stores exist) ---
-if vector_db_names:
+        # --- Source Groups (top-level filter: pdf / csv / json / html / url) ---
+        if available_source_groups:
+            # Use the canonical known types as the selectable options, but keep
+            # sensible defaults based on previous state or what is actually
+            # available in the registry.
+            options = sorted(KNOWN_SOURCE_GROUPS)
+            # Prefer session-selected groups if they are valid known types,
+            # otherwise prefer groups that are both known and present in the registry.
+            default_selection = [g for g in (_selected_source_groups or available_source_groups) if g in options]
+            if not default_selection:
+                default_selection = [g for g in options if g in available_source_groups] or options[:]
 
-    # --- Source Groups (top-level filter: pdf / csv / json / html / url) ---
-    if available_source_groups:
-        # Use the canonical known types as the selectable options, but keep
-        # sensible defaults based on previous state or what is actually
-        # available in the registry.
-        options = sorted(KNOWN_SOURCE_GROUPS)
-        # Prefer session-selected groups if they are valid known types,
-        # otherwise prefer groups that are both known and present in the registry.
-        default_selection = [g for g in (_selected_source_groups or available_source_groups) if g in options]
-        if not default_selection:
-            default_selection = [g for g in options if g in available_source_groups] or options[:]
+            selected_source_groups = st.multiselect(
+                "Source Groups",
+                options,
+                default=default_selection,
+                key="query_source_groups",
+                help="Select document type(s) to search within.",
+            )
 
-        selected_source_groups = st.multiselect(
-            "Source Groups",
-            options,
-            default=default_selection,
-            key="query_source_groups",
-            help="Select document type(s) to search within.",
+            # Filter available documents to only those in selected groups using the
+            # normalized registry map so casing differences don't hide items.
+            if selected_source_groups:
+                allowed_names: set[str] = set()
+                for g in selected_source_groups:
+                    allowed_names.update(source_groups_map_norm.get(str(g).lower().strip(), []))
+                group_filtered_names = [name for name in available_source_names if name in allowed_names]
+            else:
+                group_filtered_names = available_source_names[:]
+            filtered_doc_names = sorted(group_filtered_names)
+        else:
+            selected_source_groups = []
+            filtered_doc_names = available_source_names or vector_db_names[:]
+
+        # --- Query Vector Documents (filtered by source groups) ---
+        selected_query_vector_dbs = st.multiselect(
+            "Query Vector Documents",
+            filtered_doc_names,
+            default=selected_query_vector_dbs,
+            key="query_vector_dbs",
         )
 
-        # Filter available documents to only those in selected groups using the
-        # normalized registry map so casing differences don't hide items.
-        if selected_source_groups:
-            allowed_names: set[str] = set()
-            for g in selected_source_groups:
-                allowed_names.update(source_groups_map_norm.get(str(g).lower().strip(), []))
-            group_filtered_names = [name for name in available_source_names if name in allowed_names]
-        else:
-            group_filtered_names = available_source_names[:]
-        filtered_doc_names = sorted(group_filtered_names)
-    else:
-        selected_source_groups = []
-        filtered_doc_names = available_source_names or vector_db_names[:]
+        # Retrieval mode below source groups
+        retrieval_mode = st.selectbox("Retrieval Mode", ["ensemble", "separate", "routed"], index=0, key="retrieval_mode")
 
-    # --- Query Vector Documents (filtered by source groups) ---
-    selected_query_vector_dbs = st.multiselect(
-        "Query Vector Documents",
-        filtered_doc_names,
-        default=selected_query_vector_dbs,
-        key="query_vector_dbs",
-    )
+        # Question input
+        question = ""
+        submit_clicked = False
+        question = st.text_input("Enter your question:", placeholder="e.g., What is the company's revenue for the quarter?", key="question_input")
+        submit_clicked = st.button("Submit Question")
 
-    # Retrieval mode below source groups
-    retrieval_mode = st.selectbox("Retrieval Mode", ["ensemble", "separate", "routed"], index=0, key="retrieval_mode")
+        # If the user submitted a question, ensure the expander remains open
+        if submit_clicked:
+            st.session_state["rag_query_expanded"] = True
 
-    # Question input
-    question = ""
-    submit_clicked = False
-    question = st.text_input("Enter your question:", placeholder="e.g., What is the company's revenue for the quarter?", key="question_input")
-    submit_clicked = st.button("Submit Question")
-
-    # -- Submit and answer ------------------------------------------------------
-    if submit_clicked and question:
-        if not selected_query_vector_dbs:
-            st.error("Select at least one document before submitting a question.")
-        else:
-            active_stores = load_vector_stores_for_query(selected_query_vector_dbs, source_vector_stores, embeddings)
-            active_configs = build_query_source_configs(active_stores, group_by="vector_db")
-            if not active_configs:
-                st.error("The selected documents are not available. Please re-select.")
+        # -- Submit and answer ------------------------------------------------------
+        if submit_clicked and question:
+            if not selected_query_vector_dbs:
+                st.error("Select at least one document before submitting a question.")
             else:
-                with st.spinner("Answering your question..."):
-                    result = answer_question(
-                        question,
-                        active_configs,
-                        provider=selected_provider,
-                        model=selected_model,
-                        api_base=(
-                            github_endpoint
-                            if selected_provider in ("github", "proxied_github")
-                            else deepseek_base_url
-                            if selected_provider in ("deepseek", "proxied_deepseek")
-                            else ollama_chat_base_url
-                        ),
-                        api_key=(
-                            github_token
-                            if selected_provider == "github"
-                            else deepseek_token
-                            if selected_provider == "deepseek"
-                            else None
-                        ),
-                        proxy_port=proxy_port,
-                        http_proxy_port=http_proxy_port,
-                        https_proxy_port=https_proxy_port,
-                        system_prompt="You are a concise financial analysis assistant.",
-                        temperature=0.2,
-                        retrieval_mode=retrieval_mode,
-                        auto_truncate_prompt=bool(auto_truncate_prompt),
-                        use_tools=use_tools,
-                    )
+                active_stores = load_vector_stores_for_query(selected_query_vector_dbs, source_vector_stores, embeddings)
+                active_configs = build_query_source_configs(active_stores, group_by="vector_db")
+                if not active_configs:
+                    st.error("The selected documents are not available. Please re-select.")
+                else:
+                    with st.spinner("Answering your question..."):
+                        result = answer_question(
+                            question,
+                            active_configs,
+                            provider=selected_provider,
+                            model=selected_model,
+                            api_base=(
+                                github_endpoint
+                                if selected_provider in ("github", "proxied_github")
+                                else deepseek_base_url
+                                if selected_provider in ("deepseek", "proxied_deepseek")
+                                else ollama_chat_base_url
+                            ),
+                            api_key=(
+                                github_token
+                                if selected_provider == "github"
+                                else deepseek_token
+                                if selected_provider == "deepseek"
+                                else None
+                            ),
+                            proxy_port=proxy_port,
+                            http_proxy_port=http_proxy_port,
+                            https_proxy_port=https_proxy_port,
+                            system_prompt="You are a concise financial analysis assistant.",
+                            temperature=0.2,
+                            retrieval_mode=retrieval_mode,
+                            auto_truncate_prompt=bool(auto_truncate_prompt),
+                            use_tools=use_tools,
+                        )
 
-                    llm_response = result.get("response")
-                    metadata = result.get("metadata")
-                    if not llm_response:
-                        st.error("Model returned no response.")
-                        st.stop()
+                        llm_response = result.get("response")
+                        metadata = result.get("metadata")
+                        if not llm_response:
+                            st.error("Model returned no response.")
+                            st.stop()
 
-                    if metadata and metadata.prompt_truncated:
-                        st.warning(f"Prompt was truncated to fit gpt-5 input limits ({metadata.prompt_tokens_before_guard} -> {metadata.prompt_tokens_after_guard} tokens before sending).")
+                        if metadata and metadata.prompt_truncated:
+                            st.warning(f"Prompt was truncated to fit gpt-5 input limits ({metadata.prompt_tokens_before_guard} -> {metadata.prompt_tokens_after_guard} tokens before sending).")
 
-                    st.session_state["latest_response"] = {"question": question, "answer": llm_response, "response_type": response_type}
+                        st.session_state["latest_response"] = {"question": question, "answer": llm_response, "response_type": response_type}
 
                     # Store the retrieval result for citation formatting
                     _llm_result = result.get("llm_result")
@@ -920,6 +982,20 @@ if vector_db_names:
 
 if agent_submit and agent_rag_query.strip():
     with st.spinner(f"Running {selected_agent} agent..."):
+        # Progress UI elements
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        def _progress_cb(pct: int, msg: str | None = None) -> None:
+            try:
+                progress_bar.progress(min(max(int(pct or 0), 0), 100))
+            except Exception:
+                pass
+            try:
+                if msg is not None:
+                    status_text.text(msg)
+            except Exception:
+                pass
         # For proxied providers, don't pass token (proxy handles auth)
         _effective_gh_token = github_token if selected_provider == "github" else ""
         _effective_ds_token = deepseek_token if selected_provider == "deepseek" else ""
@@ -944,9 +1020,23 @@ if agent_submit and agent_rag_query.strip():
             publisher_format=agent_format,
             publisher_email=agent_email.strip(),
             publisher_title=agent_research_name.strip(),
+            progress_callback=_progress_cb,
         )
+        # Ensure UI shows completion
+        try:
+            progress_bar.progress(100)
+            status_text.text("Agent run complete")
+        except Exception:
+            pass
         if result["success"]:
             st.session_state["agent_response"] = result["response"]
+            # Store structured debug info for Agent Debug panel
+            st.session_state["agent_response_debug"] = {
+                "trace": result.get("trace"),
+                "raw_history": result.get("raw_history"),
+                "stdout": result.get("stdout"),
+                "stderr": result.get("stderr"),
+            }
             if result.get("publication"):
                 st.session_state["agent_publication"] = result["publication"]
                 # Extract filepath from publication result and store for quick preview/linking
@@ -1034,6 +1124,19 @@ with st.expander("Communication Output", expanded=True):
             elif agent_publication:
                 st.caption("Publication Result:")
                 st.code(agent_publication, language="json")
+            # Agent debug panel
+            agent_debug = st.session_state.get("agent_response_debug")
+            if agent_debug:
+                with st.expander("Agent Debug (raw)", expanded=False):
+                    try:
+                        st.subheader("Trace")
+                        st.code(agent_debug.get("trace") or "(no trace)")
+                        st.subheader("Stdout / Stderr")
+                        st.code((agent_debug.get("stdout") or "") + "\n" + (agent_debug.get("stderr") or ""))
+                        st.subheader("Raw History")
+                        st.json(agent_debug.get("raw_history") or {})
+                    except Exception:
+                        st.write(agent_debug)
             # Show raw agent response in a collapsible section
             if agent_response:
                 with st.expander("Raw Agent Response", expanded=not bool(agent_publication)):

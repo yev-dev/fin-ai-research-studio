@@ -480,6 +480,7 @@ def run_agent_task(
     publisher_format: str = "html",
     publisher_email: str = "",
     publisher_title: str = "",
+    progress_callback: Any = None,
     **kwargs,
 ) -> dict[str, Any]:
     """Run a single agent task and return the response.
@@ -533,6 +534,12 @@ def run_agent_task(
         embedding_base_url=embedding_base_url or None,
         github_token=_github_token_for_bridge,
     )
+    # Signal progress: engine initialised
+    try:
+        if progress_callback:
+            progress_callback(10, "Engine initialised")
+    except Exception:
+        pass
 
     _retrieve_config = {
         "task": "qa",
@@ -604,6 +611,11 @@ def run_agent_task(
             full_prompt = prompt
 
         with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            try:
+                if progress_callback:
+                    progress_callback(40, "Running agent")
+            except Exception:
+                pass
             agent.chat(full_prompt)
 
         # Extract last message
@@ -636,6 +648,20 @@ def run_agent_task(
                     except Exception:
                         raw_json = str(raw_obj)
                     logger.info("LLM raw_response available", extra={"llm_raw_response": raw_json})
+        # Fallback: if no response captured in chat_messages, use stdout/stderr trace
+        if not response:
+            trace_fallback = (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip()
+            if trace_fallback:
+                # Prefer the last non-empty line as a short response
+                lines = [ln for ln in trace_fallback.splitlines() if ln.strip()]
+                response = lines[-1] if lines else trace_fallback
+                logger.debug("Falling back to stdout/stderr for agent response")
+            else:
+                # As last resort, stringify the history object for debugging
+                try:
+                    response = json.dumps(history, default=lambda o: getattr(o, "__dict__", str(o)), ensure_ascii=False)
+                except Exception:
+                    response = str(history)
         # Compose trace and log communication output & agent response
         trace = (stdout_buffer.getvalue() + stderr_buffer.getvalue()).strip()
         if trace:
@@ -645,6 +671,11 @@ def run_agent_task(
         pub_result = None
         if is_publisher:
             try:
+                if progress_callback:
+                    try:
+                        progress_callback(85, "Preparing publication")
+                    except Exception:
+                        pass
                 pub_title = publisher_title.strip() or f"{agent_name} Report"
                 pub_result = publish_research_report(
                     content=_strip_terminate_marker(response) or prompt,
@@ -652,6 +683,11 @@ def run_agent_task(
                     format=publisher_format,
                     email=publisher_email,
                 )
+                if progress_callback:
+                    try:
+                        progress_callback(100, "Publication complete")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -661,6 +697,9 @@ def run_agent_task(
             "success": True,
             "publication": pub_result,
             "trace": trace,
+            "raw_history": history,
+            "stdout": stdout_buffer.getvalue(),
+            "stderr": stderr_buffer.getvalue(),
         }
 
     except openai.APIConnectionError as exc:
