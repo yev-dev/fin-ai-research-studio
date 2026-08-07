@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 warnings.filterwarnings(
@@ -169,6 +171,7 @@ class RAGSourceStore:
         )
         tmp.replace(self._path)
 
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -177,6 +180,7 @@ class RAGSourceStore:
         """Add or replace a source record."""
         self._sources[source.name] = source
         self._save()
+        logger.info("RAG source added: %s (chunks=%d)", source.name, source.chunk_count)
         return source
 
     def add_from_metadata(
@@ -204,6 +208,7 @@ class RAGSourceStore:
             created_at=now,
             updated_at=now,
         )
+        logger.info("Adding RAG source from metadata: %s (file=%s)", name, filename)
         return self.add(source)
 
     def remove(self, name: str) -> bool:
@@ -212,6 +217,7 @@ class RAGSourceStore:
         self._sources.pop(name, None)
         if existed:
             self._save()
+            logger.info("Removed RAG source: %s", name)
         return existed
 
     def get(self, name: str) -> RAGSource | None:
@@ -258,6 +264,7 @@ class RAGSourceStore:
         """
         from pathlib import Path as _Path
 
+        logger.info("Syncing RAG source store from disk: %s", str(self._dir))
         added = 0
 
         # Discover all vector-store directories
@@ -356,6 +363,7 @@ def load_and_convert_document(file_path):
     Raises:
         ValueError: If file format is not supported
     """
+    logger.info("Loading and converting document: %s", str(file_path))
     # Check if it's a URL
     if isinstance(file_path, str) and (file_path.startswith('http://') or file_path.startswith('https://')):
         html_content = _scrape_html_from_url(file_path)

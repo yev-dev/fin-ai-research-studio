@@ -1,6 +1,8 @@
 
 import json
+import logging
 from typing import Any, Optional
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 from pandas import DataFrame
@@ -24,6 +26,8 @@ def _get_service() -> MarketDataService:
     global _market_service
     if _market_service is None:
         _market_service = MarketDataService.from_environment()
+        # Log creation of the market data service
+        logger.info("Initialized MarketDataService from environment")
     return _market_service
 
 
@@ -97,6 +101,7 @@ def _handle_service_error(
 
 def get_stock_data(symbol: str, start_date: str, end_date: str) -> dict:
     """Retrieve stock price data for a ticker symbol within the date range."""
+    logger.info("get_stock_data: symbol=%s start=%s end=%s", symbol, start_date, end_date)
     service = _get_service()
     try:
         stock_data = service.get_stock_data(symbol, start_date, end_date)
@@ -120,6 +125,7 @@ def get_stock_data(symbol: str, start_date: str, end_date: str) -> dict:
 
 def get_stock_info(symbol: str) -> dict:
     """Fetches and returns latest stock information."""
+    logger.info("get_stock_info: symbol=%s", symbol)
     service = _get_service()
     try:
         return service.get_stock_info(symbol)
@@ -129,6 +135,7 @@ def get_stock_info(symbol: str) -> dict:
 
 def get_company_info(symbol: str, save_path: Optional[str] = None) -> dict:
     """Fetches and returns company information as a DataFrame."""
+    logger.info("get_company_info: symbol=%s save_path=%s", symbol, save_path)
     service = _get_service()
     try:
         df = service.get_company_info(symbol)
@@ -158,6 +165,7 @@ def get_company_info(symbol: str, save_path: Optional[str] = None) -> dict:
 
 def get_stock_dividends(symbol: str, save_path: Optional[str] = None) -> dict:
     """Fetches and returns the latest dividends data as a DataFrame."""
+    logger.info("get_stock_dividends: symbol=%s save_path=%s", symbol, save_path)
     service = _get_service()
     try:
         dividends = service.get_stock_dividends(symbol)
@@ -380,6 +388,7 @@ def publish_research_html(content: str, title: str = "Research Report") -> str:
     filename = f"{safe_title.replace(' ', '_')}_{_datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     filepath = _OUTPUT_DIR / filename
     filepath.write_text(html, encoding="utf-8")
+    logger.info("Published research HTML: %s", str(filepath))
 
     return _json.dumps({
         "status": "published",
@@ -431,6 +440,7 @@ def publish_research_pdf(content: str, title: str = "Research Report") -> str:
 
     html_path = _OUTPUT_DIR / f"{prefix}_{timestamp}_printable.html"
     html_path.write_text(html, encoding="utf-8")
+    logger.info("Published research printable HTML (fallback): %s", str(html_path))
 
     return _json.dumps({
         "status": "published",

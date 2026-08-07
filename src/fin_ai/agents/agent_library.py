@@ -121,6 +121,11 @@ library = [
             a complete data picture.  Cross-reference RAG findings with live
             financial data in your analysis.
 
+            If the task asks for a report, document, publication, or file,
+            use ``publish_research_report`` with the requested format and
+            optional email address.  Do not publish unless the task or user
+            explicitly asks for a document/output file.
+
             When the task requests it, you can publish findings:
             - ``publish_research_report(content, title, format, email)``
               generates HTML/PDF and optionally emails it.
