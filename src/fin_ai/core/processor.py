@@ -11,6 +11,8 @@ and agent framework.  It consolidates:
 from __future__ import annotations
 
 import json
+import base64
+from datetime import datetime, date
 import contextlib
 import io
 import logging
@@ -785,12 +787,42 @@ def _build_tool_follow_up(
             ],
         },
     ]
+    def _json_default(o):
+        # Common fallbacks for non-serializable objects
+        if isinstance(o, (datetime, date)):
+            return o.isoformat()
+        if isinstance(o, bytes):
+            try:
+                return o.decode("utf-8")
+            except Exception:
+                return base64.b64encode(o).decode("ascii")
+        if isinstance(o, Path):
+            return str(o)
+        if isinstance(o, (set, tuple)):
+            return list(o)
+        if hasattr(o, "to_dict"):
+            try:
+                return o.to_dict()
+            except Exception:
+                pass
+        if hasattr(o, "__dict__"):
+            try:
+                return {k: v for k, v in o.__dict__.items() if not k.startswith("_")}
+            except Exception:
+                pass
+        return str(o)
+
     for tc in tool_calls:
         tool_result = execute_litellm_tool_call(tc["name"], tc["arguments"])
+        try:
+            content = json.dumps(tool_result, default=_json_default, ensure_ascii=False)
+        except Exception:
+            # As a final fallback, coerce to string
+            content = json.dumps({"result": str(tool_result)})
         messages.append({
             "role": "tool",
             "tool_call_id": tc["id"],
             "name": tc["name"] or "unknown_tool",
-            "content": json.dumps(tool_result),
+            "content": content,
         })
     return messages
