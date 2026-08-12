@@ -703,10 +703,18 @@ if vector_db_names:
                 st.error("The selected documents are not available. Please re-select.")
             else:
                 with st.spinner("Answering your question..."):
+                    # Resolve the API key for the selected provider
+                    _rag_api_key = None
+                    if selected_provider == "github":
+                        _rag_api_key = github_token or None
+                    elif selected_provider == "deepseek":
+                        _rag_api_key = deepseek_token or None
                     result = answer_question(
                         question,
                         active_configs,
                         provider=selected_provider,
+                        model=selected_model,
+                        api_key=_rag_api_key,
                         system_prompt="You are a concise financial analysis assistant.",
                         temperature=0.2,
                         retrieval_mode=retrieval_mode,
@@ -761,6 +769,12 @@ if agent_submit and agent_rag_query.strip():
             deepseek_base_url=deepseek_base_url,
             deepseek_token=_effective_ds_token,
         )
+        # Resolve the chat API key for the agent's engine bridge
+        _agent_chat_api_key = None
+        if selected_provider == "github":
+            _agent_chat_api_key = github_token or None
+        elif selected_provider == "deepseek":
+            _agent_chat_api_key = deepseek_token or None
         result = run_agent_task(
             agent_name=selected_agent,
             prompt=agent_rag_query.strip(),
@@ -769,6 +783,8 @@ if agent_submit and agent_rag_query.strip():
             embedding_provider=selected_emb_provider,
             embedding_base_url=embeddings_base_url,
             chat_provider=selected_provider,
+            chat_model=selected_model,
+            chat_api_key=_agent_chat_api_key,
             is_publisher=(selected_agent == "Research_Publisher"),
             publisher_format=agent_format,
             publisher_email=agent_email.strip(),

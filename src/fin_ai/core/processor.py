@@ -310,6 +310,8 @@ def answer_question(
     source_configs: Sequence[SourceRetrieverConfig],
     *,
     provider: str,
+    model: str | None = None,
+    api_key: str | None = None,
     system_prompt: str = "You are a concise financial analysis assistant.",
     temperature: float = 0.2,
     retrieval_mode: str = "ensemble",
@@ -326,6 +328,8 @@ def answer_question(
         question,
         source_configs,
         provider=provider,
+        model=model,
+        api_key=api_key,
         response_format=response_format,
         mode=retrieval_mode,
         system_prompt=effective_system,
@@ -349,7 +353,7 @@ def answer_question(
                 tools=YAHOO_FINANCE_TOOLS,
                 messages=follow_up_messages,
             )
-            requester = ModelRequest(provider=provider, format="text")
+            requester = ModelRequest(provider=provider, format="text", model=model, api_key=api_key)
             llm_response = requester.client.send(follow_up_payload, response_class=requester.response_class)
 
     content = llm_response.content if llm_response else ""
@@ -388,12 +392,14 @@ def build_agent_llm_config(
     model : str
         Model identifier (e.g. ``"llama3.1"``, ``"openai/gpt-4o"``).
     """
-    cfg = get_provider_config(provider)
+    # AutoGen's OpenAI client sends models directly. For GitHub we strip the
+    # LiteLLM ``openai/`` prefix since GitHub's API expects ``gpt-4o``.
+    _clean_model = model.removeprefix("openai/").removeprefix("deepseek/") if "/" in model else model
 
     if provider == "github":
         return {
             "config_list": [
-                {"model": model, "base_url": github_endpoint, "api_key": github_token}
+                {"model": _clean_model, "base_url": github_endpoint, "api_key": github_token}
             ],
             "temperature": 0,
             "timeout": 120,
@@ -401,7 +407,7 @@ def build_agent_llm_config(
     elif provider == "proxied_github":
         return {
             "config_list": [
-                {"model": model, "base_url": github_endpoint, "api_key": ""}
+                {"model": _clean_model, "base_url": github_endpoint, "api_key": ""}
             ],
             "temperature": 0,
             "timeout": 120,
@@ -409,7 +415,7 @@ def build_agent_llm_config(
     elif provider in ("deepseek", "proxied_deepseek"):
         return {
             "config_list": [
-                {"model": model, "base_url": deepseek_base_url, "api_key": deepseek_token}
+                {"model": _clean_model, "base_url": deepseek_base_url, "api_key": deepseek_token}
             ],
             "temperature": 0,
             "timeout": 120,
@@ -418,7 +424,7 @@ def build_agent_llm_config(
         base = ollama_base_url or OLLAMA_BASE_URL
         return {
             "config_list": [
-                {"model": model, "base_url": base, "api_key": "ollama"}
+                {"model": _clean_model, "base_url": base, "api_key": "ollama"}
             ],
             "temperature": 0,
             "timeout": 120,
@@ -434,6 +440,8 @@ def run_agent_task(
     embedding_provider: str = "",
     embedding_base_url: str = "",
     chat_provider: str = "ollama",
+    chat_model: str | None = None,
+    chat_api_key: str | None = None,
     is_publisher: bool = False,
     publisher_format: str = "html",
     publisher_email: str = "",
@@ -459,6 +467,10 @@ def run_agent_task(
         Embedding API base URL.
     chat_provider : str
         Chat provider for RAG queries.
+    chat_model : str, optional
+        Chat model identifier for the engine bridge's RAG queries.
+    chat_api_key : str, optional
+        API key / token for the chat provider's RAG queries.
     is_publisher : bool
         If True, uses ``SingleAssistant`` (no RAG); otherwise ``SingleAssistantRAG``.
     publisher_format : str
@@ -479,9 +491,19 @@ def run_agent_task(
         else None
     )
 
+    # Resolve the chat API key for the engine bridge
+    _bridge_chat_api_key = chat_api_key
+    if _bridge_chat_api_key is None:
+        if chat_provider == "github":
+            _bridge_chat_api_key = os.getenv("GITHUB_TOKEN", "") or None
+        elif chat_provider == "deepseek":
+            _bridge_chat_api_key = os.getenv("DEEPSEEK_TOKEN", "") or None
+
     # Initialise the engine bridge for local RAG
     init_engine(
         chat_provider=chat_provider,
+        chat_model=chat_model,
+        chat_api_key=_bridge_chat_api_key,
         embedding_model=embedding_model or None,
         embedding_provider=embedding_provider or None,
         embedding_base_url=embedding_base_url or None,

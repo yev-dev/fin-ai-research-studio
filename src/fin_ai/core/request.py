@@ -529,7 +529,7 @@ def create_llm_client(
         If *provider* is unknown.
     """
     cfg = get_provider_config(provider)
-    resolved_model = model or resolve_model_name(provider)
+    resolved_model = cfg.build_model_string(model) if model else resolve_model_name(provider)
     resolved_api_base = cfg.build_api_base(api_base)
 
     # Validate required params

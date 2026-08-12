@@ -207,6 +207,8 @@ def plan_query_sources_with_llm(
     sources: Sequence[SourceRetrieverConfig],
     *,
     provider: Provider,
+    model: str | None = None,
+    api_key: str | None = None,
     max_sources: int | None = None,
 ) -> QueryRoutingDecision | None:
     """Use an LLM to choose the most relevant sources for a query."""
@@ -250,6 +252,8 @@ def plan_query_sources_with_llm(
     try:
         response = _run_model_request(
             provider=provider,
+            model=model,
+            api_key=api_key,
             response_format="text",
             prompt=prompt,
             system_prompt="You are a retrieval planning assistant. Output strict JSON only.",
@@ -509,6 +513,8 @@ def query_with_multi_source_prompting(
     sources: Sequence[SourceRetrieverConfig],
     *,
     provider: Provider,
+    model: str | None = None,
+    api_key: str | None = None,
     response_format: str = "text",
     mode: QueryMode = "ensemble",
     system_prompt: str | None = None,
@@ -541,6 +547,8 @@ def query_with_multi_source_prompting(
         retrieval,
         prompt,
         provider=provider,
+        model=model,
+        api_key=api_key,
         system_prompt=system_prompt or "You are a helpful financial analysis assistant.",
         temperature=temperature,
         max_tokens=max_tokens,
@@ -549,6 +557,8 @@ def query_with_multi_source_prompting(
     )
     response = _run_model_request(
         provider=provider,
+        model=model,
+        api_key=api_key,
         response_format=response_format,
         prompt=prompt,
         system_prompt=system_prompt or "You are a helpful financial analysis assistant.",
@@ -572,13 +582,15 @@ def _compress_prompt_for_oversized_requests(
     prompt: str,
     *,
     provider: Provider,
+    model: str | None = None,
+    api_key: str | None = None,
     system_prompt: str,
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
     auto_truncate_prompt: bool,
 ) -> str:
-    model_name = resolve_model_name(provider)
+    model_name = model or resolve_model_name(provider)
     safe_budget = get_model_safe_input_budget(model_name)
     if safe_budget is None:
         return prompt
@@ -596,6 +608,8 @@ def _compress_prompt_for_oversized_requests(
         query,
         retrieval,
         provider=provider,
+        model=model,
+        api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
         proxy_port=proxy_port,
@@ -610,6 +624,8 @@ def _summarize_retrieval_for_question(
     retrieval: MultiSourceQueryResult,
     *,
     provider: Provider,
+    model: str | None = None,
+    api_key: str | None = None,
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
@@ -627,6 +643,8 @@ def _summarize_retrieval_for_question(
         for batch_prompt in batch_prompts:
             summary_response = _run_model_request(
                 provider=provider,
+                model=model,
+                api_key=api_key,
                 response_format="text",
                 prompt=batch_prompt,
                 system_prompt=OVERSIZED_PROMPT_SUMMARY_SYSTEM_PROMPT,
@@ -763,12 +781,14 @@ def _run_model_request(
     temperature: float,
     max_tokens: int | None,
     proxy_port: int | None,
+    model: str | None = None,
+    api_key: str | None = None,
     auto_truncate_prompt: bool = True,
     tools: list[dict[str, Any]] | None = None,
 ) -> ModelResponse:
     from .request import ModelRequest, RequestPayload
 
-    return ModelRequest(provider=provider, format=response_format).request(
+    return ModelRequest(provider=provider, format=response_format, model=model, api_key=api_key).request(
         RequestPayload(
             prompt=prompt,
             system_prompt=system_prompt,

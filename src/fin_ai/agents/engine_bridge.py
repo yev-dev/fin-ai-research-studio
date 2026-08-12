@@ -67,6 +67,8 @@ class _EngineState:
     source_configs: list = field(default_factory=list)
     loaded_stores: dict[str, Any] = field(default_factory=dict)
     chat_provider: str = "ollama"
+    chat_model: str | None = None
+    chat_api_key: str | None = None
     initialised: bool = False
     _last_retrieval: MultiSourceQueryResult | None = None
     _last_prompt_result: MultiSourcePromptResult | None = None
@@ -78,6 +80,8 @@ _state = _EngineState()
 def _ensure_initialised(
     *,
     chat_provider: str = "ollama",
+    chat_model: str | None = None,
+    chat_api_key: str | None = None,
     embedding_model: str | None = None,
     embedding_provider: str | None = None,
     embedding_base_url: str | None = None,
@@ -91,6 +95,11 @@ def _ensure_initialised(
     chat_provider : str
         Provider for chat/answer generation (``"ollama"``, ``"github"``,
         ``"deepseek"``, ``"proxied_github"``, ``"proxied_deepseek"``).
+    chat_model : str, optional
+        Chat model identifier (e.g. ``"openai/gpt-4o"``, ``"llama3.1"``).
+        Falls back to environment variable or default if not provided.
+    chat_api_key : str, optional
+        API key / token for the chat provider.  Falls back to env var.
     embedding_model : str, optional
         Override for the embedding model name.
     embedding_provider : str, optional
@@ -115,6 +124,8 @@ def _ensure_initialised(
     )
 
     _state.chat_provider = chat_provider
+    _state.chat_model = chat_model
+    _state.chat_api_key = chat_api_key
 
     emb_model = embedding_model or DEFAULT_EMBEDDING_MODEL
     emb_provider = embedding_provider or DEFAULT_EMBEDDINGS_PROVIDER
@@ -226,6 +237,8 @@ def query_local_rag(
         question=query,
         source_configs=_state.source_configs,
         provider=_state.chat_provider,
+        model=_state.chat_model,
+        api_key=_state.chat_api_key,
         system_prompt=(
             "You are a precise financial research assistant. "
             "Answer based ONLY on the retrieved context below. "
@@ -455,6 +468,8 @@ def query_with_routed_rag(
         question=query,
         source_configs=selected,
         provider=_state.chat_provider,
+        model=_state.chat_model,
+        api_key=_state.chat_api_key,
         system_prompt=(
             "You are a precise financial research assistant. "
             "Answer based ONLY on the retrieved context below."
@@ -509,6 +524,8 @@ from fin_ai.core.tools import (  # noqa: E402
 
 def init_engine(
     chat_provider: str = "ollama",
+    chat_model: str | None = None,
+    chat_api_key: str | None = None,
     embedding_model: str | None = None,
     embedding_provider: str | None = None,
     embedding_base_url: str | None = None,
@@ -526,6 +543,8 @@ def init_engine(
     """
     _ensure_initialised(
         chat_provider=chat_provider,
+        chat_model=chat_model,
+        chat_api_key=chat_api_key,
         embedding_model=embedding_model,
         embedding_provider=embedding_provider,
         embedding_base_url=embedding_base_url,

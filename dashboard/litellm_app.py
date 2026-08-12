@@ -1,9 +1,13 @@
 import os
 import json
+import logging
 
 import streamlit as st
 
 from dashboard import DEFAULT_GITHUB_MODEL, DEFAULT_DEEPSEEK_MODEL
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 from fin_ai.core.providers import list_models
 from fin_ai.core.request import create_llm_client, RequestPayload, known_providers
 from fin_ai.core.response import ResponseFactory
@@ -31,6 +35,7 @@ with st.sidebar:
     )
     provider_label = st.selectbox("Provider", provider_labels, index=default_provider_index)
     provider = provider_label_to_key[provider_label]
+    logger.info("Provider selected: %s (label=%s)", provider, provider_label)
 
     response_format = st.selectbox(
         "Response Format",
@@ -73,11 +78,14 @@ with st.sidebar:
             default_gh = os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL)
             default_gh_idx = gh_model_ids.index(default_gh) if default_gh in gh_model_ids else 0
             st.selectbox("Model", gh_model_ids, index=default_gh_idx, key="github_model")
+            logger.info("GitHub models fetched: %d available, defaulting to %s", len(gh_model_ids), default_gh)
         else:
             st.text_input("Model", value=os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL), key="github_model")
             st.caption("No models found. Check your token or enter a model name manually.")
+            logger.warning("No GitHub models returned from API. Falling back to manual input.")
     elif provider == "proxied_github":
         st.text_input("Model", value=os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL), key="proxied_github_model")
+        logger.info("Proxied GitHub model input configured with default: %s", os.getenv("GITHUB_MODEL", DEFAULT_GITHUB_MODEL))
     elif provider == "deepseek":
         _ds_token = os.getenv("DEEPSEEK_TOKEN", "")
         with st.spinner("Fetching available DeepSeek models..."):
@@ -87,13 +95,17 @@ with st.sidebar:
             default_ds = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
             default_ds_idx = ds_model_ids.index(default_ds) if default_ds in ds_model_ids else 0
             st.selectbox("Model", ds_model_ids, index=default_ds_idx, key="deepseek_model")
+            logger.info("DeepSeek models fetched: %d available, defaulting to %s", len(ds_model_ids), default_ds)
         else:
             st.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="deepseek_model")
             st.caption("No models found. Check your token or enter a model name manually.")
+            logger.warning("No DeepSeek models returned from API. Falling back to manual input.")
     elif provider == "proxied_deepseek":
         st.text_input("Model", value=os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL), key="proxied_deepseek_model")
+        logger.info("Proxied DeepSeek model input configured with default: %s", os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL))
     else:  # ollama
         _ol_endpoint = st.session_state.get("ollama_api_base", os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434"))
+        logger.info("Fetching Ollama models from endpoint: %s", _ol_endpoint)
         with st.spinner("Fetching available Ollama models..."):
             ol_models = list_models("ollama", base_url=_ol_endpoint)
         ol_model_ids = [m.id for m in ol_models]
@@ -101,9 +113,11 @@ with st.sidebar:
             default_ol = os.getenv("OLLAMA_MODEL", "llama3.1")
             default_ol_idx = ol_model_ids.index(default_ol) if default_ol in ol_model_ids else 0
             st.selectbox("Model", ol_model_ids, index=default_ol_idx, key="ollama_model")
+            logger.info("Ollama models fetched: %d available, defaulting to %s", len(ol_model_ids), default_ol)
         else:
             st.text_input("Model", value=os.getenv("OLLAMA_MODEL", "llama3.1"), key="ollama_model")
             st.caption("No models found. Is Ollama running?")
+            logger.warning("No Ollama models returned from endpoint %s.", _ol_endpoint)
 
 system_prompt = st.text_area(
     "System Prompt",
@@ -150,19 +164,32 @@ if st.button("Send", type="primary"):
             tools=YAHOO_FINANCE_TOOLS,
         )
 
+        # Read the selected model from session state (set by the provider-specific Model selectbox)
+        _model = st.session_state.get(f"{provider}_model", None)
+        logger.info("Sending request — provider=%s, model=%s, response_format=%s, temperature=%.2f, max_tokens=%s, proxy_port=%s",
+                     provider, _model, response_format, float(temperature),
+                     int(max_tokens) if max_tokens > 0 else None, proxy_port)
+
         try:
             client = create_llm_client(
                 provider=provider,
+                model=_model,
                 api_key=_api_key,
                 proxy_port=proxy_port,
             )
+            logger.info("LLM client created — resolved model=%s, api_base=%s",
+                         client.model, client.api_base)
             response = client.send(payload, response_class=ResponseFactory.get(response_format))
 
             first_raw = response.get_metadata().raw_response
             first_message = first_raw.choices[0].message
             tool_calls = extract_tool_calls(first_message)
+            logger.info("Initial response received — finish_reason=%s, tool_calls=%d, content_length=%d",
+                         first_raw.choices[0].finish_reason, len(tool_calls),
+                         len(first_message.content or ""))
 
             if tool_calls:
+                logger.info("Processing %d tool call(s)", len(tool_calls))
                 follow_up_messages = []
                 if payload.system_prompt:
                     follow_up_messages.append({"role": "system", "content": payload.system_prompt})
@@ -186,7 +213,9 @@ if st.button("Send", type="primary"):
                 )
 
                 for tool_call in tool_calls:
+                    logger.info("Executing tool call — name=%s, id=%s", tool_call["name"], tool_call["id"])
                     tool_result = execute_litellm_tool_call(tool_call["name"], tool_call["arguments"])
+                    logger.info("Tool call result — name=%s, result_type=%s", tool_call["name"], type(tool_result).__name__)
                     follow_up_messages.append(
                         {
                             "role": "tool",
@@ -206,13 +235,23 @@ if st.button("Send", type="primary"):
                     tools=YAHOO_FINANCE_TOOLS,
                     messages=follow_up_messages,
                 )
+                logger.info("Sending follow-up request with %d messages (including %d tool results)",
+                             len(follow_up_messages), len(tool_calls))
                 response = client.send(
                     follow_up_payload,
                     response_class=ResponseFactory.get(response_format),
                 )
+                logger.info("Follow-up response received successfully")
         except Exception as exc:
+            logger.error("Request failed: %s: %s", type(exc).__name__, exc)
             st.exception(exc)
         else:
+            metadata = response.get_metadata()
+            logger.info("Request succeeded — model=%s, provider=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s, truncated=%s",
+                         metadata.model, metadata.provider,
+                         metadata.prompt_tokens, metadata.completion_tokens,
+                         metadata.total_tokens, metadata.prompt_truncated)
+
             st.subheader("Response")
             if response_format == "markdown":
                 st.markdown(response.render())

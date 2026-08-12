@@ -201,7 +201,14 @@ def create_embeddings(
     """
     cfg = get_provider_config(provider)
     resolved_base = cfg.build_api_base(api_base)
-    resolved_key = api_key or os.getenv("GITHUB_TOKEN", "")
+
+    # Resolve API key from provider-specific env vars when not explicitly provided
+    if api_key is None:
+        if provider == "github":
+            api_key = os.getenv("GITHUB_TOKEN", "")
+        elif provider == "deepseek":
+            api_key = os.getenv("DEEPSEEK_TOKEN", "")
+    resolved_key = api_key or ""
 
     if provider == "ollama":
         return _create_ollama_embeddings(model, resolved_base)
