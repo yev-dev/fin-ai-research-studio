@@ -112,6 +112,14 @@ library = [
               decision-making
             - Cite specific data points and sources in your analysis
             - Verify data across multiple tools before concluding
+            - When a task requests visuals/figures, generate real charts with
+              the charting tools (``plot_stock_price_chart``,
+              ``get_share_performance``, ``get_pe_eps_performance``,
+              ``plot_cross_asset_comparison``, ``plot_time_series``,
+              ``plot_narrative_timeline``, ``plot_lead_lag``) and keep the
+              returned filepath / ``CHART:<path>`` marker in your report so the
+              publisher embeds the actual image. NEVER return an empty
+              placeholder — always call a chart tool to produce a real PNG.
             - When asked to publish, use ``publish_research_report`` to
               save the research as HTML/PDF
 
@@ -148,6 +156,13 @@ library = [
             "get_analyst_recommendations",
             "publish_research_report",
             "publish_research_html",
+            "plot_stock_price_chart",
+            "get_share_performance",
+            "get_pe_eps_performance",
+            "plot_cross_asset_comparison",
+            "plot_time_series",
+            "plot_narrative_timeline",
+            "plot_lead_lag",
             "list_vector_stores",
             "list_available_models",
             "get_provider_info",
@@ -228,6 +243,11 @@ library = [
             1. Use ``query_local_rag`` to search indexed documents for context
             2. Use ``get_financial_snapshot`` for live data
             3. Combine findings into the report content
+            4. For figures, call the charting tools (``plot_stock_price_chart``,
+               ``plot_cross_asset_comparison``, ``get_share_performance``,
+               ``plot_time_series``) and keep their returned filepath /
+               ``CHART:<path>`` markers in the content. The publisher
+               automatically embeds these images into the HTML/PDF report.
 
             You can also publish research produced by other agents —
             accept their response text as content and run it through
@@ -246,6 +266,10 @@ library = [
             "get_financial_snapshot",
             "get_source_citations",
             "get_stock_info",
+            "plot_stock_price_chart",
+            "get_share_performance",
+            "plot_cross_asset_comparison",
+            "plot_time_series",
             "list_vector_stores",
             "get_provider_info",
         ],

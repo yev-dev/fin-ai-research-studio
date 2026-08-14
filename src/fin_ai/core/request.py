@@ -87,6 +87,20 @@ class ProviderConfig:
             return model
         return self.model_format.format(model=model)
 
+    def ensure_model_string(self, model: str) -> str:
+        """Return the LiteLLM model string for an explicit ``model``.
+
+        Applies the provider's prefix (e.g. ``ollama/``, ``deepseek/``) when it
+        is missing, and leaves already-prefixed strings (e.g. the GitHub default
+        ``openai/gpt-4o`` or an existing ``ollama/...``) untouched.
+        """
+        if self.model_format == "direct":
+            return model
+        prefix = self.model_format.format(model="")
+        if model.startswith(prefix):
+            return model
+        return self.build_model_string(model)
+
     def build_api_base(self, api_base: str | None) -> str:
         return api_base or self.default_base_url
 
@@ -454,7 +468,7 @@ class ModelRequest:
         self.provider = provider
         self.response_class = ResponseFactory.get(format)
         cfg = get_provider_config(provider)
-        resolved_model = model or resolve_model_name(provider)
+        resolved_model = cfg.ensure_model_string(model) if model else resolve_model_name(provider)
         resolved_api_base = cfg.build_api_base(api_base)
 
         # Resolve API key from env vars when not explicitly provided
@@ -529,7 +543,7 @@ def create_llm_client(
         If *provider* is unknown.
     """
     cfg = get_provider_config(provider)
-    resolved_model = model or resolve_model_name(provider)
+    resolved_model = cfg.ensure_model_string(model) if model else resolve_model_name(provider)
     resolved_api_base = cfg.build_api_base(api_base)
 
     # Validate required params

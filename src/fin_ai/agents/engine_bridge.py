@@ -504,6 +504,254 @@ def query_with_routed_rag(
 
 
 # ---------------------------------------------------------------------------
+# Chart generation tools — wrappers over fin_ai.core.charting
+# ---------------------------------------------------------------------------
+
+from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR as _PUBLISHED_RESEARCH_DIR  # noqa: E402
+import re as _re  # noqa: E402
+import json as _json_chart  # noqa: E402
+
+_CHARTS_DIR = _PUBLISHED_RESEARCH_DIR / "charts"
+_CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _chart_path(name: str) -> str:
+    """Build an absolute PNG path inside the charts output directory."""
+    safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", (name or "chart")).strip("_") or "chart"
+    return str(_CHARTS_DIR / f"{safe}.png")
+
+
+def _chart_result(caption: str, path: str) -> str:
+    """Compose the tool result with an embed marker the publisher understands."""
+    return (
+        f"Generated chart saved to: {path}\n"
+        f"CHART:{path}\n\n"
+        f"Caption: {caption}\n"
+        "Keep this filepath/CHART marker in your report so the publisher "
+        "embeds the image automatically."
+    )
+
+
+def _coerce_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            obj = _json_chart.loads(value)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    raise ValueError("expected a JSON object mapping label -> symbol")
+
+
+def _coerce_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            obj = _json_chart.loads(value)
+            if isinstance(obj, list):
+                return obj
+        except Exception:
+            pass
+    raise ValueError("expected a JSON array")
+
+
+def plot_stock_price_chart(
+    ticker_symbol: str,
+    start_date: str,
+    end_date: str,
+    plot_type: str = "line",
+    mav: str = "",
+) -> str:
+    """Plot a stock price chart and save it as a PNG file.
+
+    Parameters
+    ----------
+    ticker_symbol : str
+        Ticker symbol, e.g. "NVDA".
+    start_date : str
+        Start date (YYYY-MM-DD).
+    end_date : str
+        End date (YYYY-MM-DD).
+    plot_type : str
+        Chart style ("line").
+    mav : str
+        Optional comma-separated moving-average windows, e.g. "20,50".
+    """
+    from fin_ai.core import charting
+
+    mav_list = [int(x) for x in mav.split(",") if x.strip().isdigit()] if mav else None
+    path = _chart_path(f"{ticker_symbol}_price")
+    charting.plot_stock_price_chart(
+        ticker_symbol, start_date, end_date, path,
+        plot_type=plot_type, mav=mav_list,
+    )
+    return _chart_result(f"{ticker_symbol} price from {start_date} to {end_date}", path)
+
+
+def get_share_performance(ticker_symbol: str, filing_date: str) -> str:
+    """Plot % change of a stock vs S&P 500 over the 12 months before a date.
+
+    Parameters
+    ----------
+    ticker_symbol : str
+        Ticker, e.g. "NVDA".
+    filing_date : str
+        Reference date (YYYY-MM-DD).
+    """
+    from fin_ai.core import charting
+
+    path = _chart_path(f"{ticker_symbol}_vs_sp500")
+    charting.get_share_performance(ticker_symbol, filing_date, path)
+    return _chart_result(f"{ticker_symbol} vs S&P 500, 12 months to {filing_date}", path)
+
+
+def get_pe_eps_performance(
+    ticker_symbol: str,
+    filing_date: str,
+    years: int = 4,
+) -> str:
+    """Plot PE-ratio and EPS history for a ticker.
+
+    Parameters
+    ----------
+    ticker_symbol : str
+        Ticker, e.g. "NVDA".
+    filing_date : str
+        Reference date (YYYY-MM-DD).
+    years : int
+        Number of years of history. Default 4.
+    """
+    from fin_ai.core import charting
+
+    path = _chart_path(f"{ticker_symbol}_pe_eps")
+    charting.get_pe_eps_performance(ticker_symbol, filing_date, years=years, save_path=path)
+    return _chart_result(f"{ticker_symbol} PE ratio & EPS over {years} years", path)
+
+
+def plot_cross_asset_comparison(
+    series_map: dict,
+    start_date: str,
+    end_date: str,
+    normalize: bool = True,
+) -> str:
+    """Plot multiple series (rebased to 100) on one chart for cross-asset comparison.
+
+    Parameters
+    ----------
+    series_map : dict | str
+        JSON object mapping a display label to a ticker symbol, e.g.
+        ``{"Brent": "BZ=F", "Breakevens": "TIP"}``.
+    start_date : str
+        Start date (YYYY-MM-DD).
+    end_date : str
+        End date (YYYY-MM-DD).
+    normalize : bool
+        Rebase every series to 100 at the start. Default True.
+    """
+    from fin_ai.core import charting
+
+    mapping = _coerce_dict(series_map)
+    path = _chart_path("cross_asset_comparison")
+    charting.plot_cross_asset_comparison(
+        mapping, start_date, end_date, path, normalize=normalize
+    )
+    labels = ", ".join(mapping.keys())
+    return _chart_result(f"Cross-asset comparison: {labels}", path)
+
+
+def plot_time_series(
+    series_map: dict,
+    start_date: str,
+    end_date: str,
+    movers: str = "",
+) -> str:
+    """Plot one or more time series with optional moving-average overlays.
+
+    Parameters
+    ----------
+    series_map : dict | str
+        JSON object mapping a label to a ticker symbol.
+    start_date : str
+        Start date (YYYY-MM-DD).
+    end_date : str
+        End date (YYYY-MM-DD).
+    movers : str
+        Optional JSON array of ``{"label": ..., "window": 30}`` objects to
+        overlay rolling means.
+    """
+    from fin_ai.core import charting
+
+    mapping = _coerce_dict(series_map)
+    path = _chart_path("time_series")
+    movers_list = []
+    if movers:
+        try:
+            movers_list = _coerce_list(movers)
+        except ValueError:
+            movers_list = []
+    charting.plot_time_series(
+        mapping, start_date, end_date, path, movers=movers_list
+    )
+    return _chart_result(f"Time series: {', '.join(mapping.keys())}", path)
+
+
+def plot_narrative_timeline(events: list, start_date: str, end_date: str) -> str:
+    """Plot a narrative timeline of dated events.
+
+    Parameters
+    ----------
+    events : list | str
+        JSON array of ``{"date": "YYYY-MM-DD", "label": "..."}`` objects.
+    start_date : str
+        Start of the timeline (YYYY-MM-DD).
+    end_date : str
+        End of the timeline (YYYY-MM-DD).
+    """
+    from fin_ai.core import charting
+
+    evs = _coerce_list(events)
+    path = _chart_path("narrative_timeline")
+    charting.plot_narrative_timeline(evs, start_date, end_date, path)
+    return _chart_result(f"Narrative timeline ({len(evs)} events)", path)
+
+
+def plot_lead_lag(
+    series_a_symbol: str,
+    series_b_symbol: str,
+    start_date: str,
+    end_date: str,
+    max_lag: int = 30,
+) -> str:
+    """Plot lagged correlation (lead/lag) between two series.
+
+    Parameters
+    ----------
+    series_a_symbol : str
+        First series ticker.
+    series_b_symbol : str
+        Second series ticker.
+    start_date : str
+        Start date (YYYY-MM-DD).
+    end_date : str
+        End date (YYYY-MM-DD).
+    max_lag : int
+        Max lag in days. Default 30.
+    """
+    from fin_ai.core import charting
+
+    path = _chart_path(f"leadlag_{series_a_symbol}_{series_b_symbol}")
+    charting.plot_lead_lag(
+        series_a_symbol, series_b_symbol, start_date, end_date, path, max_lag=int(max_lag)
+    )
+    return _chart_result(
+        f"Lead/lag correlation: {series_a_symbol} vs {series_b_symbol}", path
+    )
+
+
+# ---------------------------------------------------------------------------
 # Research publishing tools — re-exported from fin_ai.core.tools
 # ---------------------------------------------------------------------------
 
@@ -614,4 +862,12 @@ ENGINE_BRIDGE_TOOLS: dict[str, Any] = {
     "publish_research_report": publish_research_report,
     "send_research_email": send_research_email,
     "list_agent_profiles": list_agent_profiles,
+    # Chart generation tools (wrappers over fin_ai.core.charting)
+    "plot_stock_price_chart": plot_stock_price_chart,
+    "get_share_performance": get_share_performance,
+    "get_pe_eps_performance": get_pe_eps_performance,
+    "plot_cross_asset_comparison": plot_cross_asset_comparison,
+    "plot_time_series": plot_time_series,
+    "plot_narrative_timeline": plot_narrative_timeline,
+    "plot_lead_lag": plot_lead_lag,
 }

@@ -16,11 +16,10 @@ from pathlib import Path
 # Project paths
 # ---------------------------------------------------------------------------
 
-# __file__ = src/fin_ai/config/fin_ai.py
-#   .parent            = src/fin_ai/config/
-#   .parent.parent     = src/fin_ai/
-#   .parent.parent.parent = src/
-#   .parent.parent.parent.parent = project root (ai-financial-analysis/)
+APPLICATION_NAME = "ai-research-studio"
+
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 
@@ -32,10 +31,13 @@ if _env_file.exists():
     from dotenv import load_dotenv as _load_dotenv
     _load_dotenv(_env_file, override=False)
 
+APP_DIR = str(Path.home() / "research_studio")
+
 _vector_db_env = os.environ.get("VECTOR_DB_DIR", "").strip()
-VECTOR_DB_DIR = _vector_db_env or str(PROJECT_ROOT / "vector_db")
-PUBLISHED_RESEARCH_DIR = PROJECT_ROOT / "published_research"
-QUESTION_HISTORY_DIR = Path(VECTOR_DB_DIR) / "question_history"
+
+VECTOR_DB_DIR = _vector_db_env or str(Path(APP_DIR).expanduser() / "vector_db")
+PUBLISHED_RESEARCH_DIR = Path(APP_DIR).expanduser() / "published_research"
+QUESTION_HISTORY_DIR = Path(APP_DIR).expanduser() / "question_history"
 
 os.makedirs(VECTOR_DB_DIR, exist_ok=True)
 os.makedirs(QUESTION_HISTORY_DIR, exist_ok=True)
@@ -57,7 +59,7 @@ YAHOO_DATA_DIR = os.environ.get(
 # Provider endpoints
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://192.168.1.188:11434").rstrip("/")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_ENDPOINT", "http://127.0.0.1:11434").rstrip("/")
 GITHUB_BASE_URL = "https://models.github.ai/inference"
 GITHUB_EMBEDDING_BASE_URL = "https://models.github.ai/inference"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"

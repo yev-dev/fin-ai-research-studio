@@ -82,6 +82,7 @@ from fin_ai.core.providers import list_models
 from fin_ai.core.query import format_source_citations
 from fin_ai.core.rag import load_embedding_metadata
 from fin_ai.core.request import known_providers, get_provider_config
+from fin_ai.core.tools import publish_research_pdf, publish_research_html
 from fin_ai.agents.prompts_library import RESEARCH_ANALYSIS
 
 # Agent library for sidebar listing
@@ -718,9 +719,15 @@ with st.expander("Prompt Controls", expanded=True):
     st.caption(f"Preview filename: {preview_filename}")
 
     if agent_prompt_template != "Custom":
-        st.session_state["agent_prompt_main"] = RESEARCH_ANALYSIS[agent_prompt_template].format(
-            asset=agent_prompt_asset.strip() or "NVDA"
-        )
+        # Safely lookup the template; fall back to the raw selection string if missing
+        template_text = RESEARCH_ANALYSIS.get(agent_prompt_template)
+        if all([template_text, "{asset}" in template_text, agent_prompt_asset.strip() != ""]):
+            st.session_state["agent_prompt_main"] = template_text.format(
+                asset=agent_prompt_asset.strip()
+            )
+        else:
+            # Defensive fallback: use the selected value as the prompt body
+            st.session_state["agent_prompt_main"] = template_text
 
     agent_rag_query = st.text_area(
         "Agent Task Prompt",
@@ -1050,6 +1057,35 @@ if agent_submit and agent_rag_query.strip():
                     pass
             if result.get("trace"):
                 st.session_state["agent_trace"] = result["trace"]
+
+            # ------------------------------------------------------------------
+            # Publish the agent's response in the report format selected in the
+            # UI ("pdf"/"html").  This makes the dashboard always honour the
+            # chosen format for ANY agent profile — not only Research_Publisher —
+            # whenever the Run Agent button is clicked and instructions were
+            # provided.  The generated file is stored for preview/download below.
+            # ------------------------------------------------------------------
+            try:
+                _report_title = agent_research_name.strip() or f"{selected_agent} Report"
+                # Mirror run_agent_task's cleanup of the AutoGen terminate marker.
+                _report_content = result["response"].strip()
+                if _report_content.endswith("TERMINATE"):
+                    _report_content = _report_content[: -len("TERMINATE")].rstrip()
+
+                if agent_format == "pdf":
+                    _publication = publish_research_pdf(_report_content, title=_report_title)
+                else:
+                    _publication = publish_research_html(_report_content, title=_report_title)
+
+                st.session_state["agent_publication"] = _publication
+                _pub_data = json.loads(_publication)
+                _pub_filepath = _pub_data.get("filepath")
+                if _pub_filepath:
+                    st.session_state["agent_publication_filepath"] = _pub_filepath
+            except Exception as _pub_error:  # noqa: BLE001 - surface to the UI
+                st.session_state["agent_publication"] = json.dumps(
+                    {"status": "error", "error": str(_pub_error)}
+                )
         else:
             st.session_state["agent_response"] = f"Agent error: {result['error']}"
             if result.get("trace"):

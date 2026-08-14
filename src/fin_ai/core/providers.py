@@ -55,7 +55,7 @@ def list_ollama_models(
 
     Uses Ollama's ``/api/tags`` endpoint to retrieve the list of pulled models.
     """
-    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://192.168.1.188:11434")).rstrip("/")
+    endpoint = (base_url or os.getenv("OLLAMA_ENDPOINT", "http://127.0.0.1:11434")).rstrip("/")
     url = f"{endpoint}/api/tags"
 
     try:
