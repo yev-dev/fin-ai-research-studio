@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from fin_ai.config.fin_ai import OLLAMA_BASE_URL
+from fin_ai.config import OLLAMA_BASE_URL
 
 # ---------------------------------------------------------------------------
 # Markers

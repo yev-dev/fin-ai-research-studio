@@ -63,7 +63,7 @@ from dashboard.utils import (
 )
 
 # Config
-from fin_ai.config.fin_ai import (
+from fin_ai.config import (
     VECTOR_DB_DIR,
     OLLAMA_BASE_URL,
     DEFAULT_CHAT_MODEL,

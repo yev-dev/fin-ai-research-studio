@@ -13,6 +13,8 @@ from typing import Optional
 import json
 import contextvars
 
+from fin_ai.config import LOG_DIR
+
 # Compute a sensible default log directory relative to the project root
 # without importing package config to avoid circular imports.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -142,7 +144,7 @@ def configure_logging(
     root.addHandler(console)
 
     if enable_file:
-        target = Path(log_dir) if log_dir else Path(_DEFAULT_LOG_DIR)
+        target = Path(log_dir) if log_dir else Path(LOG_DIR)
         try:
             target.mkdir(parents=True, exist_ok=True)
             fh = RotatingFileHandler(

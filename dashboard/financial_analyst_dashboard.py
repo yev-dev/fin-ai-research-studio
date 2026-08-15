@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 import warnings
-from hashlib import md5
+import traceback
 from pathlib import Path
-from time import perf_counter
 from datetime import datetime
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -37,7 +37,157 @@ for pattern in WARNING_PATTERNS:
 import streamlit as st
 import time
 import streamlit.components.v1 as components
-from langchain_community.vectorstores import FAISS
+import sys
+import traceback
+
+# Install a lightweight excepthook to capture uncaught exceptions during UI
+# execution. Streamlit often catches exceptions, but this provides an extra
+# durable copy for silent crash analysis.
+def _ui_excepthook(exc_type, exc_value, exc_tb):
+    try:
+        logger = logging.getLogger("finai.app")
+        trace = traceback.format_exception(exc_type, exc_value, exc_tb)
+        logger.error("Uncaught UI exception:\n%s", "".join(trace))
+        try:
+            logs_dir = Path(VECTOR_DB_DIR or "./logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            with (logs_dir / "last_exception_ui.log").open("w", encoding="utf-8") as fh:
+                fh.write("".join(trace))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+sys.excepthook = _ui_excepthook
+# ---------------------------------------------------------------------------
+# Monkey-patch Streamlit `selectbox` to capture and log exceptions that would
+# otherwise cause silent crashes when a dropdown is interacted with.
+# This wraps the original `st.selectbox` and on failure logs the traceback to
+# the finai logger and `last_exception_ui.log`, and surfaces a brief error in
+# the sidebar so the user can copy the stack trace.
+try:
+    _orig_selectbox = st.selectbox
+
+    def _safe_selectbox(label, options, *args, **kwargs):
+        try:
+            return _orig_selectbox(label, options, *args, **kwargs)
+        except Exception as _e:
+            try:
+                import traceback as _tb
+                trace = _tb.format_exc()
+                logger = logging.getLogger("finai.app")
+                logger.error("Exception in selectbox '%s': %s", label, trace)
+                logs_dir = Path(VECTOR_DB_DIR or "./logs")
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                with (logs_dir / "last_exception_ui.log").open("w", encoding="utf-8") as fh:
+                    fh.write(trace)
+                try:
+                    st.sidebar.error(f"UI error in dropdown: {label}")
+                    with st.sidebar.expander("View traceback", expanded=True):
+                        st.text(trace)
+                except Exception:
+                    pass
+            except Exception:
+                try:
+                    print("Exception in selectbox and failed to log:\n", _e)
+                except Exception:
+                    pass
+            # Fallback return: choose a safe default from options when possible
+            try:
+                if hasattr(options, "__iter__"):
+                    for o in options:
+                        return o
+            except Exception:
+                pass
+            return None
+
+    st.selectbox = _safe_selectbox
+except Exception:
+    pass
+
+
+# Generic wrapper for common Streamlit input widgets to capture UI exceptions
+try:
+    _streamlit_input_names = [
+        "text_input",
+        "text_area",
+        "number_input",
+        "slider",
+        "radio",
+        "multiselect",
+        "checkbox",
+        "button",
+        "file_uploader",
+        "date_input",
+    ]
+
+    def _make_safe_input(name: str):
+        orig = getattr(st, name, None)
+        if orig is None:
+            return None
+
+        def _safe(*args, **kwargs):
+            try:
+                return orig(*args, **kwargs)
+            except Exception as _e:
+                try:
+                    import traceback as _tb
+                    trace = _tb.format_exc()
+                    logger = logging.getLogger("finai.app")
+                    logger.exception("Exception in Streamlit %s: %s", name, trace)
+                    logs_dir = Path(VECTOR_DB_DIR or "./logs")
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                    with (logs_dir / "last_exception_ui.log").open("w", encoding="utf-8") as fh:
+                        fh.write(trace)
+                    try:
+                        st.sidebar.error(f"UI error in {name}")
+                        with st.sidebar.expander("View traceback", expanded=True):
+                            st.text(trace)
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        print("Failed to log Streamlit input error for", name, _e)
+                    except Exception:
+                        pass
+
+                # Provide a safe fallback value depending on widget
+                try:
+                    if name in ("text_input", "text_area", "file_uploader"):
+                        return ""
+                    if name in ("number_input", "slider"):
+                        return 0
+                    if name in ("checkbox", "button"):
+                        return False
+                    if name in ("selectbox", "radio"):
+                        opts = args[1] if len(args) > 1 else kwargs.get("options")
+                        if hasattr(opts, "__iter__"):
+                            for o in opts:
+                                return o
+                        return None
+                    if name == "multiselect":
+                        return []
+                    return None
+                except Exception:
+                    return None
+
+        return _safe
+
+    for _name in _streamlit_input_names:
+        try:
+            safe = _make_safe_input(_name)
+            if safe is not None:
+                setattr(st, _name, safe)
+        except Exception:
+            pass
+except Exception:
+    pass
+try:
+    from langchain_community.vectorstores import FAISS
+    HAS_FAISS = True
+except Exception:
+    FAISS = object
+    HAS_FAISS = False
 
 from dashboard import (
     DEFAULT_GITHUB_MODEL,
@@ -51,45 +201,306 @@ from dashboard import (
     OLLAMA_BASE_URL,
     VECTOR_DB_DIR,
 )
-from dashboard.utils import (
-    execute_python_code,
-    extract_python_code,
-    render_pdf_pages,
-    render_csv_thumbnail,
-    sanitize_generated_python_code,
-)
+try:
+    from dashboard.utils import (
+        execute_python_code,
+        extract_python_code,
+        render_pdf_pages,
+        render_csv_thumbnail,
+        sanitize_generated_python_code,
+    )
+    UTILS_OK = True
+except Exception as _e:
+    UTILS_OK = False
+    _utils_import_exc = traceback.format_exc()
+
+    def execute_python_code(code: str):
+        return ("", "execute_python_code unavailable: missing optional deps")
+
+    def extract_python_code(response_text: str) -> str:
+        return response_text
+
+    def render_pdf_pages(file_path, output_dir, zoom=1.5):
+        return []
+
+    def render_csv_thumbnail(file_path: str, output_dir: str) -> str:
+        return ""
+
+    def sanitize_generated_python_code(code: str) -> str:
+        return code
 from fin_ai.core.embeddings import create_embeddings
-from fin_ai.core.processor import (
-    SUPPORTED_UPLOAD_TYPES,
-    answer_question,
-    build_query_source_configs,
-    clear_history,
-    discover_source_groups,
-    fetch_models,
-    filter_stores_by_source_groups,
-    # find_source_document,
-    get_source_vector_stores,
-    get_vector_db_names,
-    load_history,
-    load_vector_stores_for_query,
-    process_uploaded_document,
-    purge_vector_db,
-    save_history_entry,
-    build_agent_llm_config,
-    run_agent_task,
-)
-from fin_ai.core.providers import list_models
-from fin_ai.core.query import format_source_citations
-from fin_ai.core.rag import load_embedding_metadata
-from fin_ai.core.request import known_providers, get_provider_config
-from fin_ai.core.tools import publish_research_pdf, publish_research_html
-from fin_ai.agents.prompts_library import RESEARCH_ANALYSIS
+try:
+    from fin_ai.core.processor import (
+        SUPPORTED_UPLOAD_TYPES,
+        answer_question,
+        build_query_source_configs,
+        clear_history,
+        discover_source_groups,
+        fetch_models,
+        filter_stores_by_source_groups,
+        # find_source_document,
+        get_source_vector_stores,
+        get_vector_db_names,
+        load_history,
+        load_vector_stores_for_query,
+        process_uploaded_document,
+        purge_vector_db,
+        save_history_entry,
+        build_agent_llm_config,
+        run_agent_task,
+    )
+    PROCESSOR_OK = True
+except Exception:
+    PROCESSOR_OK = False
+
+    SUPPORTED_UPLOAD_TYPES = ["pdf", "csv"]
+
+    def _missing(*args, **kwargs):
+        raise RuntimeError("fin_ai.core.processor is not importable in this environment; install required dependencies or run in the fin_ai environment.")
+
+    answer_question = _missing
+    build_query_source_configs = _missing
+    clear_history = lambda db: None
+    discover_source_groups = lambda: {}
+    fetch_models = lambda *a, **k: []
+    filter_stores_by_source_groups = lambda *a, **k: {}
+    get_source_vector_stores = lambda: {}
+    get_vector_db_names = lambda *a, **k: []
+    load_history = lambda *a, **k: []
+    load_vector_stores_for_query = lambda *a, **k: {}
+    process_uploaded_document = _missing
+    purge_vector_db = lambda *a, **k: False
+    save_history_entry = lambda *a, **k: None
+    build_agent_llm_config = lambda *a, **k: {}
+    run_agent_task = _missing
+try:
+    from fin_ai.core.providers import list_models
+except Exception:
+    list_models = lambda *a, **k: []
+
+try:
+    from fin_ai.core.query import format_source_citations
+except Exception:
+    format_source_citations = lambda *a, **k: ""
+
+try:
+    from fin_ai.core.rag import load_embedding_metadata
+except Exception:
+    load_embedding_metadata = lambda *a, **k: {}
+
+try:
+    from fin_ai.core.request import known_providers, get_provider_config
+except Exception:
+    known_providers = lambda: {}
+
+    class _DummyProviderConfig:
+        label = "local"
+        required_params = []
+        optional_params = []
+        default_base_url = ""
+
+    def get_provider_config(key: str):
+        return _DummyProviderConfig()
+
+try:
+    from fin_ai.core.tools import publish_research_pdf, publish_research_html
+except Exception:
+    publish_research_pdf = lambda content, title="": json.dumps({"status": "unavailable"})
+    publish_research_html = lambda content, title="": json.dumps({"status": "unavailable"})
+
+try:
+    from fin_ai.agents.prompts_library import RESEARCH_ANALYSIS
+except Exception:
+    RESEARCH_ANALYSIS = {}
 
 # Agent library for sidebar listing
-from fin_ai.agents.agent_library import library as agent_library
+try:
+    from fin_ai.agents.agent_library import library as agent_library
+except Exception:
+    agent_library = {}
+import traceback
+
+# Inline minimal application-layer helpers so the dashboard doesn't depend
+# on a separate `dashboard.financial_analyst_app` module. These wrappers call
+# into `fin_ai.core` where possible and provide conservative fallbacks.
+def format_agent_prompt(template_key: str, asset: str | None = None) -> str:
+    if template_key == "Custom":
+        return ""
+    tpl = RESEARCH_ANALYSIS.get(template_key)
+    if tpl:
+        try:
+            return tpl.format(asset=(asset or "").strip() or "NVDA")
+        except Exception:
+            return tpl
+    return str(template_key or "")
+
+
+def fetch_chat_models(provider: str, api_key: str = "", api_base: str = "") -> list[str]:
+    listing_provider = provider.removeprefix("proxied_") if hasattr(provider, "removeprefix") else (provider.replace("proxied_", ""))
+    kwargs: dict[str, str] = {}
+    if api_key:
+        kwargs["api_key"] = api_key
+    if api_base:
+        kwargs["base_url"] = api_base
+    try:
+        models = fetch_models(listing_provider, **kwargs)
+        return [m.id for m in models if getattr(m, "id", "")]
+    except Exception:
+        return []
+
+
+def fetch_embedding_models(provider: str, api_key: str = "", api_base: str = "") -> list[str]:
+    listing_provider = provider.removeprefix("proxied_") if hasattr(provider, "removeprefix") else (provider.replace("proxied_", ""))
+    kwargs: dict[str, str] = {}
+    if api_key:
+        kwargs["api_key"] = api_key
+    if api_base:
+        kwargs["base_url"] = api_base
+    try:
+        models = fetch_models(listing_provider, **kwargs)
+        return [m.id for m in models if _looks_like_embedding_model(getattr(m, "id", ""))]
+    except Exception:
+        return []
+
+
+def create_embedding_instance(provider: str, model: str, api_base: str, api_key: str | None = None):
+    """Create an embeddings instance using `fin_ai.core.embeddings.create_embeddings`.
+    Returns None on failure and logs the exception for debugging.
+    """
+    try:
+        return create_embeddings(provider=provider, model=model, api_base=api_base, api_key=api_key)
+    except Exception as e:
+        try:
+            import traceback as _tb
+            trace = _tb.format_exc()
+            logging.getLogger("finai.app").exception("create_embedding_instance failed: %s", e)
+            logs_dir = Path(VECTOR_DB_DIR or "./logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            with (logs_dir / "last_exception_ui.log").open("w", encoding="utf-8") as fh:
+                fh.write(trace)
+        except Exception:
+            pass
+        return None
+
+
+def normalise_source_groups(group_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    normalised: dict[str, list[str]] = {}
+    for group, names in group_map.items():
+        key = str(group).strip().lower()
+        if key not in KNOWN_SOURCE_GROUPS:
+            continue
+        normalised.setdefault(key, []).extend(str(name).removesuffix(".faiss") for name in names)
+    return {group: sorted(set(names)) for group, names in normalised.items()}
+
+
+def resolve_source_environment(
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_base_url: str,
+    github_token: str = "",
+) -> dict[str, Any]:
+    env: dict[str, Any] = {
+        "source_vector_stores": {},
+        "vector_db_names": [],
+        "source_groups_map_norm": {},
+        "available_source_groups": [],
+        "available_source_names": [],
+        "embeddings": None,
+    }
+    try:
+        env["source_vector_stores"] = get_source_vector_stores()
+        env["vector_db_names"] = get_vector_db_names(env["source_vector_stores"])
+    except Exception:
+        return env
+    if not env["vector_db_names"]:
+        return env
+    env["embeddings"] = create_embedding_instance(
+        embedding_provider, embedding_model, embedding_base_url,
+        github_token if embedding_provider == "github" else None,
+    )
+    if env["embeddings"] is None:
+        return env
+    try:
+        group_map = discover_source_groups()
+        env["source_groups_map_norm"] = normalise_source_groups(group_map)
+        env["available_source_groups"] = sorted(env["source_groups_map_norm"].keys())
+        available_names: set[str] = set()
+        for names in env["source_groups_map_norm"].values():
+            available_names.update(n for n in names if n in env["vector_db_names"])
+        env["available_source_names"] = sorted(available_names) or list(env["vector_db_names"])
+    except Exception:
+        pass
+    return env
+
+
+def log_ui_event(message: str, level: str = "info") -> None:
+    try:
+        method = getattr(logging.getLogger("finai.app"), level, logging.getLogger("finai.app").info)
+        method(f"UI: {message}")
+    except Exception:
+        try:
+            print("UI LOG:", message)
+        except Exception:
+            pass
 
 st.set_page_config(page_title="Financial Data Analysis", layout="wide")
 SIDEBAR_PREVIEW_WIDTH = 320
+
+
+def _read_log_tail(path: Path, max_lines: int = 200) -> str:
+    try:
+        if not path.exists():
+            return f"(no file: {path})"
+        # Read last max_lines efficiently
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            block_size = 1024
+            data = b""
+            while size > 0 and data.count(b"\n") <= max_lines:
+                read_size = min(block_size, size)
+                fh.seek(size - read_size)
+                data = fh.read(read_size) + data
+                size -= read_size
+            try:
+                text = data.decode("utf-8", errors="replace")
+            except Exception:
+                text = str(data)
+        lines = text.splitlines()[-max_lines:]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"(error reading {path}: {e})"
+
+
+def _show_debug_logs_sidebar(log_dir: Path | None = None) -> None:
+    try:
+        ld = Path(log_dir or VECTOR_DB_DIR or "./logs")
+        ld.mkdir(parents=True, exist_ok=True)
+        with st.sidebar.expander("Debug Logs (tail)", expanded=False):
+            st.write("**fin_ai logs**")
+            finai = ld / "finai_app.log"
+            finlegacy = ld / "fin_ai.log"
+            last_exc = ld / "last_exception.log"
+            last_exc_ui = ld / "last_exception_ui.log"
+            st.text_area("finai_app.log (tail)", _read_log_tail(finai, 200), height=220)
+            st.text_area("fin_ai.log (tail)", _read_log_tail(finlegacy, 400), height=300)
+            st.text_area("last_exception.log", _read_log_tail(last_exc, 400), height=200)
+            st.text_area("last_exception_ui.log", _read_log_tail(last_exc_ui, 400), height=200)
+            if st.button("Clear last_exception logs"):
+                try:
+                    for p in (last_exc, last_exc_ui):
+                        if p.exists():
+                            p.unlink()
+                    st.success("Cleared last_exception files")
+                except Exception as _e:
+                    st.error(f"Failed to clear: {_e}")
+    except Exception:
+        # Do not let debug panel crash the UI
+        pass
+
+
+# Show debug logs to help capture silent crashes
+_show_debug_logs_sidebar()
 
 
 def _looks_like_embedding_model(model_id: str) -> bool:
@@ -129,28 +540,14 @@ def _parse_int_or_none(value: str | None) -> int | None:
 KNOWN_SOURCE_GROUPS = {"pdf", "csv", "json", "html", "url"}
 
 
-def _normalize_source_groups(group_map: dict[str, list[str]]) -> dict[str, list[str]]:
-    normalized: dict[str, list[str]] = {}
-    for group, names in group_map.items():
-        key = str(group).strip().lower()
-        if key not in KNOWN_SOURCE_GROUPS:
-            continue
-        normalized.setdefault(key, []).extend(
-            str(name).removesuffix(".faiss") for name in names
-        )
-    return {group: sorted(set(names)) for group, names in normalized.items()}
-
 
 @st.cache_data(ttl=20)
 def get_provider_model_ids(provider: str, api_key: str = "", base_url: str = "") -> list[str]:
-    listing_provider = provider.removeprefix("proxied_")
-    kwargs: dict[str, str] = {}
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["base_url"] = base_url
-    models = fetch_models(listing_provider, **kwargs)
-    return [m.id for m in models if getattr(m, "id", "")]
+    # Delegate model discovery to the application layer which centralises provider logic.
+    try:
+        return fetch_chat_models(provider, api_key=api_key, api_base=base_url)
+    except Exception:
+        return []
 
 # ---------------------------------------------------------------------------
 # Rendering helpers
@@ -292,10 +689,40 @@ def display_csv_in_sidebar(csv_path: str | Path, file_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 st.title("FinAI Research Studio")
+try:
+    # Log that the dashboard rendered a page load event using local helper
+    log_ui_event("dashboard.rendered")
+except Exception:
+    pass
+
+# Lightweight banner: notify user non-blocking if provider discovery failed
+try:
+    if globals().get("_provider_discovery_failed"):
+        with st.expander("Provider discovery warning", expanded=True):
+            st.warning(
+                "Provider discovery failed during startup — some provider or model lists may be unavailable."
+            )
+            exc = globals().get("_provider_discovery_exc")
+            if exc:
+                with st.expander("Show details", expanded=False):
+                    st.code(exc)
+except Exception:
+    # Never let the banner crash the UI
+    pass
+
+try:
+    # If the inlined app helpers failed to initialise, show a non-blocking banner.
+    if globals().get("_provider_discovery_failed"):
+        st.error("Application layer had issues during startup — some features may be unavailable.")
+except Exception:
+    pass
 
 # Discover vector stores
-source_vector_stores = get_source_vector_stores()
-vector_db_names = get_vector_db_names(source_vector_stores)
+_env = resolve_source_environment(
+    DEFAULT_EMBEDDINGS_PROVIDER, DEFAULT_EMBEDDING_MODEL, GITHUB_EMBEDDING_BASE_URL, github_token=""
+)
+source_vector_stores = _env.get("source_vector_stores", {})
+vector_db_names = _env.get("vector_db_names", [])
 available_chat_models, available_embedding_models, model_load_error = get_local_model_options()
 
 # ---------------------------------------------------------------------------
@@ -309,7 +736,20 @@ st.sidebar.caption(
 )
 
 # Build provider label→key mapping from ProviderConfig
-_all_cfgs = known_providers()
+_provider_discovery_failed = False
+_provider_discovery_exc = None
+try:
+    _all_cfgs = known_providers()
+except Exception as _e:  # non-invasive guard: log and continue with empty mapping
+    logging.getLogger("finai.app").exception("known_providers() failed during UI startup: %s", _e)
+    _all_cfgs = {}
+    _provider_discovery_failed = True
+    try:
+        import traceback as _tb
+
+        _provider_discovery_exc = _tb.format_exc()
+    except Exception:
+        _provider_discovery_exc = str(_e)
 provider_label_to_key = {cfg.label: name for name, cfg in _all_cfgs.items()}
 default_provider = os.getenv("DEFAULT_PROVIDER", "ollama").strip().lower()
 provider_labels = list(provider_label_to_key.keys())
@@ -495,6 +935,9 @@ default_emb_idx = next((i for i, k in enumerate(emb_labels) if embeddings_provid
 selected_emb_provider_label = st.sidebar.selectbox("Select Embedding Provider", emb_labels, index=default_emb_idx, key="emb_provider_select")
 selected_emb_provider = embeddings_provider_label_to_key[selected_emb_provider_label]
 
+
+# Ensure embedding token var exists even when GitHub is not the selected provider
+embedding_github_token = os.environ.get("GITHUB_TOKEN", "")
 if selected_emb_provider == "github":
     embedding_github_base_url = st.sidebar.text_input(
         "GitHub Embedding Base URL",
@@ -604,7 +1047,7 @@ if vector_db_names:
                 if not df_on_disk_known.empty:
                     st.sidebar.dataframe(
                         df_on_disk_known[["name", "source_type", "chunk_count", "embedding_model"]],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                     total = len(df_on_disk_known)
@@ -618,6 +1061,96 @@ if vector_db_names:
             st.sidebar.caption(f"{len(on_disk_stores)} FAISS index(es) found — sync to register.")
         else:
             st.sidebar.caption("No FAISS indexes found.")
+
+            # -- Debug logs panel ------------------------------------------------
+            with st.sidebar.expander("Debug Logs (tail)", expanded=False):
+                try:
+                    default_log = str(Path(VECTOR_DB_DIR or "") / "finai_app.log") if VECTOR_DB_DIR else "logs/fin_ai.log"
+                except Exception:
+                    default_log = "logs/fin_ai.log"
+
+                    log_path_input = st.text_input("Log file path", value=default_log, key="debug_log_path")
+                    lines_to_show = st.number_input("Lines to show", min_value=10, max_value=2000, value=200, step=10, key="debug_lines")
+                    auto_refresh = st.checkbox("Auto-refresh", value=False, key="debug_autorefresh")
+                    refresh_interval = st.number_input("Refresh interval (s)", min_value=1, max_value=3600, value=5, step=1, key="debug_interval")
+                    level_filter = st.selectbox("Log level filter", options=["ALL", "ERROR", "WARNING", "INFO", "DEBUG"], index=0, key="debug_level")
+                    if st.button("Refresh Logs", key="debug_refresh"):
+                        pass
+
+                def _tail_file(path: str, lines: int = 200) -> tuple[str, float]:
+                    try:
+                        p = Path(path)
+                        if not p.exists():
+                            return (f"Log file not found: {path}", 0.0)
+                        # Read efficiently from end
+                        with p.open("rb") as f:
+                            f.seek(0, 2)
+                            file_size = f.tell()
+                            block_size = 1024
+                            data = bytearray()
+                            while len(data) < lines * 200 and f.tell() > 0 and len(data) < 5_000_000:
+                                seek = max(0, f.tell() - block_size)
+                                f.seek(seek)
+                                chunk = f.read(min(block_size, f.tell()))
+                                data = chunk + data
+                                f.seek(seek)
+                            text = data.decode(errors="replace")
+                        tail_lines = text.splitlines()[-lines:]
+                        mtime = p.stat().st_mtime
+                        return ("\n".join(tail_lines), mtime)
+                    except Exception as e:
+                        return (f"Error reading log: {e}", 0.0)
+
+                log_text, log_mtime = _tail_file(log_path_input, int(lines_to_show))
+                # Apply log level filter and simple highlighting
+                def _filter_and_highlight(text: str, level: str) -> str:
+                    if not text:
+                        return text
+                    out_lines = []
+                    for ln in text.splitlines():
+                        ln_str = ln.rstrip()
+                        include = True
+                        detected = None
+                        try:
+                            obj = json.loads(ln_str)
+                            detected = obj.get("level") or obj.get("LEVEL")
+                        except Exception:
+                            # simple substring fallback
+                            for lvl in ("ERROR", "WARNING", "INFO", "DEBUG"):
+                                if f'"{lvl.lower()}"' in ln_str.lower() or lvl in ln_str:
+                                    detected = lvl
+                                    break
+                        if level and level != "ALL":
+                            include = (detected == level)
+                        if not include:
+                            continue
+                        # simple highlight tokens
+                        if detected == "ERROR":
+                            out_lines.append("[ERROR] " + ln_str)
+                        elif detected == "WARNING":
+                            out_lines.append("[WARN] " + ln_str)
+                        else:
+                            out_lines.append(ln_str)
+                    return "\n".join(out_lines)
+
+                filtered_text = _filter_and_highlight(log_text, level_filter)
+                if log_mtime:
+                    st.caption(f"Last modified: {datetime.fromtimestamp(log_mtime)}")
+                # Download button
+                try:
+                    fname = Path(log_path_input).name or "finai_app.log"
+                except Exception:
+                    fname = "finai_app.log"
+                st.download_button("Download Log", data=(filtered_text or log_text), file_name=fname, mime="text/plain")
+                st.code(filtered_text or log_text)
+
+                # Auto-refresh behaviour: sleep then rerun to update
+                if auto_refresh:
+                    try:
+                        time.sleep(int(refresh_interval))
+                        st.experimental_rerun()
+                    except Exception:
+                        pass
 
         sync_col, _ = st.sidebar.columns([1, 2])
         with sync_col:
@@ -719,15 +1252,7 @@ with st.expander("Prompt Controls", expanded=True):
     st.caption(f"Preview filename: {preview_filename}")
 
     if agent_prompt_template != "Custom":
-        # Safely lookup the template; fall back to the raw selection string if missing
-        template_text = RESEARCH_ANALYSIS.get(agent_prompt_template)
-        if all([template_text, "{asset}" in template_text, agent_prompt_asset.strip() != ""]):
-            st.session_state["agent_prompt_main"] = template_text.format(
-                asset=agent_prompt_asset.strip()
-            )
-        else:
-            # Defensive fallback: use the selected value as the prompt body
-            st.session_state["agent_prompt_main"] = template_text
+        st.session_state["agent_prompt_main"] = format_agent_prompt(agent_prompt_template, agent_prompt_asset)
 
     agent_rag_query = st.text_area(
         "Agent Task Prompt",
@@ -738,9 +1263,9 @@ with st.expander("Prompt Controls", expanded=True):
 
 agent_col_a, agent_col_b, agent_col_c = st.columns([1, 1, 3])
 with agent_col_a:
-    agent_submit = st.button(" Run Agent", key="run_agent_main", type="primary", use_container_width=True)
+    agent_submit = st.button(" Run Agent", key="run_agent_main", type="primary", width="stretch")
 with agent_col_b:
-    if st.button("Clear Output", key="clear_agent_main", use_container_width=True):
+    if st.button("Clear Output", key="clear_agent_main", width="stretch"):
         st.session_state.pop("agent_response", None)
         st.session_state.pop("agent_publication", None)
         st.session_state.pop("latest_response", None)
@@ -796,10 +1321,13 @@ if vector_db_names:
     try:
         if embeddings is None:
             raise RuntimeError("No embeddings available — check the sidebar for errors.")
-        # Build available source groups/names from the RAG registry so the
-        # UI shows all registered documents, not only those currently
-        # loaded into memory (loading all stores can be expensive).
-        source_groups_map_norm = _normalize_source_groups(discover_source_groups())
+        # Delegate RAG source discovery and normalisation to the application
+        # layer so provider/embedding discovery logic is consistent.
+        env_rag = resolve_source_environment(
+            selected_emb_provider, selected_embedding_model, embeddings_base_url,
+            github_token=(embedding_github_token or os.environ.get("GITHUB_TOKEN", "")),
+        )
+        source_groups_map_norm = env_rag.get("source_groups_map_norm", {})
         available_source_groups = sorted(source_groups_map_norm.keys())
 
         # Available source names should reflect what's registered and also
@@ -816,6 +1344,21 @@ if vector_db_names:
             available_source_names = vector_db_names[:]
     except (ValueError, RuntimeError) as e:
         st.sidebar.error(str(e))
+        loaded_stores = {}
+        query_source_configs = []
+        available_source_names = []
+        available_source_groups = []
+    except Exception as e:
+        # Catch-all to prevent UI crashes from unexpected errors during
+        # RAG/environment discovery; log and surface a friendly message.
+        import traceback as _tb
+
+        logging.getLogger("finai.app").exception("Unexpected error during RAG env discovery: %s", e)
+        st.sidebar.error("Unexpected error during source discovery — see Debug Logs for details.")
+        try:
+            st.sidebar.expander("Source discovery traceback", expanded=False).code(_tb.format_exc())
+        except Exception:
+            pass
         loaded_stores = {}
         query_source_configs = []
         available_source_names = []
@@ -1114,7 +1657,7 @@ with st.expander("Communication Output", expanded=True):
         agent_publication = st.session_state.get("agent_publication")
         agent_publication_filepath = st.session_state.get("agent_publication_filepath")
         agent_trace = st.session_state.get("agent_trace")
-        if st.button("Refresh Agent Response", key="refresh_agent_response_btn", use_container_width=True):
+        if st.button("Refresh Agent Response", key="refresh_agent_response_btn", width="stretch"):
             st.rerun()
         if agent_response or agent_publication or agent_publication_filepath:
             # If a publication file exists, offer to view it inline

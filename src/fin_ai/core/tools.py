@@ -1,17 +1,19 @@
 
 import json
 import logging
-from typing import Any, Optional
-logger = logging.getLogger(__name__)
 
 import pandas as pd
 from pandas import DataFrame
+from typing import Any, Optional
 
 from fin_ai.core.exceptions import (
     MarketDataNotFoundError,
     MarketDataServiceError,
 )
 from fin_ai.core.service import MarketDataService
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +402,7 @@ import html as _html
 import zlib as _zlib
 import base64 as _base64
 
-from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR
+from fin_ai.config import PUBLISHED_RESEARCH_DIR
 
 _OUTPUT_DIR = _Path(PUBLISHED_RESEARCH_DIR)
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -457,7 +459,7 @@ def _embed_report_images(html: str) -> str:
     if not html or "<img" not in html:
         return html
 
-    def _inline(match: "re.Match[str]") -> str:
+    def _inline(match: "_re.Match[str]") -> str:
         src = match.group(1)
         if src.startswith("data:"):
             return match.group(0)

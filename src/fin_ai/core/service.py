@@ -20,15 +20,14 @@ Usage
 from __future__ import annotations
 
 import json
-import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
 
-from fin_ai.config.fin_ai import YAHOO_SERVICE_OFFLINE, YAHOO_DATA_DIR
+from fin_ai.config import YAHOO_SERVICE_OFFLINE, YAHOO_DATA_DIR
 
 # ---------------------------------------------------------------------------
 # Import sibling exceptions (late-import friendly, but safe at top level)

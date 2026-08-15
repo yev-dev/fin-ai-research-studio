@@ -17,12 +17,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 # Re-export all configuration from the central config module
-from fin_ai.config.fin_ai import (  # noqa: E402, F401
+from fin_ai.config import (  # noqa: E402, F401
     # Paths
     VECTOR_DB_DIR,
     QUESTION_HISTORY_DIR,
     # Provider URLs
     OLLAMA_BASE_URL,
+    GITHUB_BASE_URL,
     GITHUB_EMBEDDING_BASE_URL,
     DEEPSEEK_BASE_URL,
     # Default models
@@ -32,6 +33,7 @@ from fin_ai.config.fin_ai import (  # noqa: E402, F401
     DEFAULT_GITHUB_MODEL,
     DEFAULT_GITHUB_EMBEDDING_MODEL,
     DEFAULT_DEEPSEEK_MODEL,
+    LOG_DIR,
 )
 
 __all__ = [
@@ -40,13 +42,15 @@ __all__ = [
     "SRC_DIR",
     "VECTOR_DB_DIR",
     "QUESTION_HISTORY_DIR",
-    "OLLAMA_BASE_URL",
+    "GITHUB_BASE_URL",
     "GITHUB_EMBEDDING_BASE_URL",
     "DEEPSEEK_BASE_URL",
+    "OLLAMA_BASE_URL",
     "DEFAULT_CHAT_MODEL",
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_EMBEDDINGS_PROVIDER",
     "DEFAULT_GITHUB_MODEL",
     "DEFAULT_GITHUB_EMBEDDING_MODEL",
     "DEFAULT_DEEPSEEK_MODEL",
+    "LOG_DIR",
 ]

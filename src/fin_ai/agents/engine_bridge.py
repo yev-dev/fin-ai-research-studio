@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fin_ai.config.fin_ai import (
+from fin_ai.config import (
     VECTOR_DB_DIR,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDINGS_PROVIDER,
@@ -507,7 +507,7 @@ def query_with_routed_rag(
 # Chart generation tools — wrappers over fin_ai.core.charting
 # ---------------------------------------------------------------------------
 
-from fin_ai.config.fin_ai import PUBLISHED_RESEARCH_DIR as _PUBLISHED_RESEARCH_DIR  # noqa: E402
+from fin_ai.config import PUBLISHED_RESEARCH_DIR as _PUBLISHED_RESEARCH_DIR  # noqa: E402
 import re as _re  # noqa: E402
 import json as _json_chart  # noqa: E402
 
