@@ -199,6 +199,55 @@ functionality into sidebar sections and a main panel:
 
 ### Sidebar
 
+## Bulk RAG Upload
+
+If you have a directory of documents you want to index into the RAG vector stores
+in bulk (PDF/CSV/JSON/HTML/DOCX), use the provided uploader script and wrappers.
+
+Files and wrappers
+- `scripts/rag_bulk_upload.py` — Python script that scans a directory and calls
+  `process_uploaded_document()` for each supported file.
+- `bin/rag_bulk_upload.sh` — POSIX shell wrapper that mirrors the environment
+  handling in `bin/start_dashboard.sh`.
+- `bin/rag_bulk_upload.bat` — simple Windows batch wrapper.
+
+Quick examples
+
+1) Dry-run (safe): list files that would be uploaded without touching the DB
+```bash
+python3 scripts/rag_bulk_upload.py --dir /path/to/docs --type pdf --dry-run
+```
+
+2) Real run (POSIX)
+```bash
+chmod +x bin/rag_bulk_upload.sh
+./bin/rag_bulk_upload.sh --dir /path/to/docs --type pdf
+```
+
+3) Specify embedding provider/model and base URL
+```bash
+python3 scripts/rag_bulk_upload.py \
+  --dir /path/to/docs \
+  --type pdf \
+  --emb-provider ollama \
+  --emb-model "nomic-embed-text:latest" \
+  --emb-base "http://127.0.0.1:11434"
+```
+
+4) Windows (batch wrapper)
+```cmd
+bin\rag_bulk_upload.bat --dir C:\path\to\docs --type pdf
+```
+
+Environment and logging
+- The shell wrapper accepts the same environment overrides as `bin/start_dashboard.sh` (e.g. `APP_DIR`, `VECTOR_DB_DIR`, `OLLAMA_CHATBOT_PYTHON`).
+- The uploader logs via the project's logging configuration and writes logs to the `LOG_DIR` configured in `src/fin_ai/config/fin_ai.py`.
+
+Notes
+- Use `--dry-run` first to validate files.
+- The uploader calls the same `process_uploaded_document()` used by the dashboard, so indexing/metadata behaviour matches the web UI.
+- If you want parallel uploads, resumable uploads, or metadata tagging per-document, open an issue or ask and I can extend the tool.
+
 | Section | Purpose |
 |---------|---------|
 | **Reasoning** | LLM provider & model selection (Ollama, GitHub, DeepSeek, proxied endpoints) |
