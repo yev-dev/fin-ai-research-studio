@@ -4,14 +4,11 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_DIR=%%~fI"
 set "FIN_APP_PATH=%PROJECT_DIR%\dashboard\financial_analyst_dashboard.py"
-set "LITELLM_APP_PATH=%PROJECT_DIR%\dashboard\litellm_app.py"
 set "VECTOR_DB_PATH_DEFAULT=%PROJECT_DIR%\vector_db"
 set "PYTHON_CMD="
-set "FIN_DASHBOARD_PORT=8501"
-set "LITELLM_DASHBOARD_PORT=8502"
+set "FIN_DASHBOARD_PORT=8502"
 
 if defined FIN_DASHBOARD_PORT_OVERRIDE set "FIN_DASHBOARD_PORT=%FIN_DASHBOARD_PORT_OVERRIDE%"
-if defined LITELLM_DASHBOARD_PORT_OVERRIDE set "LITELLM_DASHBOARD_PORT=%LITELLM_DASHBOARD_PORT_OVERRIDE%"
 
 if defined OLLAMA_CHATBOT_PYTHON (
     set "PYTHON_CMD=%OLLAMA_CHATBOT_PYTHON%"
@@ -38,4 +35,3 @@ if not defined VECTOR_DB_DIR (
 
 cd /d "%PROJECT_DIR%"
 start "Financial Analyst Dashboard" "%PYTHON_CMD%" -m streamlit run "%FIN_APP_PATH%" --server.port %FIN_DASHBOARD_PORT% %*
-start "LiteLLM Dashboard" "%PYTHON_CMD%" -m streamlit run "%LITELLM_APP_PATH%" --server.port %LITELLM_DASHBOARD_PORT% %*

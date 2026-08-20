@@ -36,6 +36,8 @@ for pattern in WARNING_PATTERNS:
 
 import streamlit as st
 import time
+import re
+from string import Formatter
 import streamlit.components.v1 as components
 from langchain_community.vectorstores import FAISS
 
@@ -685,11 +687,13 @@ with st.expander("Prompt Controls", expanded=True):
         index=0,
         key="agent_prompt_template_main",
     )
+    # Make asset symbol optional and default to empty so templates are not
+    # pre-populated unexpectedly. Users can fill parameters exposed below.
     agent_prompt_asset = st.text_input(
-        "Asset Symbol",
-        value=st.session_state.get("agent_prompt_asset_main", "NVDA"),
+        "Asset Symbol (optional)",
+        value=st.session_state.get("agent_prompt_asset_main", ""),
         key="agent_prompt_asset_main",
-        help="Used to populate the selected prompt template.",
+        help="Optional: used to populate template parameters like {asset}.",
     )
 
     # Pre-fill research name with a helpful default if not provided
@@ -721,13 +725,36 @@ with st.expander("Prompt Controls", expanded=True):
     if agent_prompt_template != "Custom":
         # Safely lookup the template; fall back to the raw selection string if missing
         template_text = RESEARCH_ANALYSIS.get(agent_prompt_template)
-        if all([template_text, "{asset}" in template_text, agent_prompt_asset.strip() != ""]):
-            st.session_state["agent_prompt_main"] = template_text.format(
-                asset=agent_prompt_asset.strip()
-            )
+        if template_text:
+            # Discover placeholder field names used in the template (e.g. 'asset')
+            formatter = Formatter()
+            field_names = [fname for _, fname, _, _ in formatter.parse(template_text) if fname]
+
+            # For each placeholder, expose a small input so users can provide values
+            params: dict[str, str] = {}
+            for fname in field_names:
+                key = f"agent_param_{fname}"
+                default_val = st.session_state.get(key, "")
+                # Use a single-line text input for parameters; allow empty values
+                val = st.text_input(f"Parameter: {fname}", value=default_val, key=key)
+                if isinstance(val, str) and val.strip():
+                    params[fname] = val.strip()
+
+            # Also include the optional top-level asset input if present
+            if agent_prompt_asset and agent_prompt_asset.strip():
+                params.setdefault("asset", agent_prompt_asset.strip())
+
+            # Safe partial formatter: replace placeholders only for provided params
+            def _partial_format(tpl: str, mapping: dict[str, str]) -> str:
+                def _repl(m):
+                    name = m.group(1)
+                    return mapping.get(name, "{" + name + "}")
+                return re.sub(r"\{(\w+)\}", _repl, tpl)
+
+            formatted = _partial_format(template_text, params)
+            st.session_state["agent_prompt_main"] = formatted
         else:
-            # Defensive fallback: use the selected value as the prompt body
-            st.session_state["agent_prompt_main"] = template_text
+            st.session_state["agent_prompt_main"] = agent_prompt_template
 
     agent_rag_query = st.text_area(
         "Agent Task Prompt",

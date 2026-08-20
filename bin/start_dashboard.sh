@@ -2,10 +2,20 @@
 
 set -eu
 
+APP_DIR="$HOME/research_studio"
+VECTOR_DB_DIR="$APP_DIR/vector_db"
+PUBLISHED_RESEARCH_DIR="$APP_DIR/published_research"
+QUESTION_HISTORY_DIR="$APP_DIR/question_history"
+PORT_NUMBER="${PORT_NUMBER:-8601}"
+
+export APP_DIR
+export VECTOR_DB_DIR
+export PUBLISHED_RESEARCH_DIR
+export QUESTION_HISTORY_DIR
+
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 FIN_APP_PATH="$PROJECT_DIR/dashboard/financial_analyst_dashboard.py"
-# LITELLM_APP_PATH="$PROJECT_DIR/dashboard/litellm_app.py"
 VECTOR_DB_PATH_DEFAULT="$PROJECT_DIR/vector_db"
 
 if [ -n "${OLLAMA_CHATBOT_PYTHON:-}" ]; then
@@ -26,14 +36,17 @@ fi
 export VECTOR_DB_DIR="${VECTOR_DB_DIR:-$VECTOR_DB_PATH_DEFAULT}"
 cd "$PROJECT_DIR"
 
-FIN_DASHBOARD_PORT="${FIN_DASHBOARD_PORT:-8601}"
-# LITELLM_DASHBOARD_PORT="${LITELLM_DASHBOARD_PORT:-8502}"
+# Ensure `streamlit` is importable in the chosen Python environment
+if ! "$PYTHON_CMD" -c "import importlib; importlib.import_module('streamlit')" >/dev/null 2>&1; then
+    echo "Streamlit is not installed in $PYTHON_CMD environment. Install with: $PYTHON_CMD -m pip install streamlit" >&2
+    exit 1
+fi
 
-"$PYTHON_CMD" -m streamlit run "$FIN_APP_PATH" --server.port "$FIN_DASHBOARD_PORT" "$@" &
+echo "Starting FinAI dashboard on port $PORT_NUMBER using $PYTHON_CMD"
+
+"$PYTHON_CMD" -m streamlit run "$FIN_APP_PATH" --server.port "$PORT_NUMBER" "$@" &
 FIN_PID=$!
 
-# "$PYTHON_CMD" -m streamlit run "$LITELLM_APP_PATH" --server.port "$LITELLM_DASHBOARD_PORT" "$@" &
-# LITELLM_PID=$!
 
 cleanup() {
     kill "$FIN_PID" 2>/dev/null || true

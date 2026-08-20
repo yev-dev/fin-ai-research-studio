@@ -10,7 +10,7 @@ PORT_NUMBER="${PORT_NUMBER:-8601}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-RAG_SCRIPT="$PROJECT_DIR/scripts/rag_bulk_upload.py"
+CLI_SCRIPT="$PROJECT_DIR/scripts/run_agents_cli.py"
 
 if [ -n "${OLLAMA_CHATBOT_PYTHON:-}" ]; then
     PYTHON_CMD="$OLLAMA_CHATBOT_PYTHON"
@@ -34,6 +34,6 @@ if ! "$PYTHON_CMD" -c "import importlib; importlib.import_module('fin_ai')" >/de
     exit 1
 fi
 
-echo "Running RAG bulk uploader"
+echo "Running FinAI agent CLI"
 
-"$PYTHON_CMD" "$RAG_SCRIPT" "$@"
+"$PYTHON_CMD" "$CLI_SCRIPT" "$@"

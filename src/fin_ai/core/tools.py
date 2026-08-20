@@ -2,6 +2,7 @@
 import json
 import logging
 from typing import Any, Optional
+import re
 logger = logging.getLogger(__name__)
 
 import pandas as pd
@@ -436,7 +437,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
 <h1>{{ title }}</h1>
 <div class="meta">
-  Generated: {{ date }} | FinAI Research Publisher
+  Generated: {{ date }} | dbDIG AI Research Publisher
 </div>
 {{ content }}
 <div class="disclaimer">

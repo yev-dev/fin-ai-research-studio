@@ -92,41 +92,93 @@ def list_github_models(
     """List available models from the GitHub Models catalog.
 
     Fetches the official model catalog at
-    ``https://models.github.ai/catalog/models`` and parses model IDs.
+    ``https://models.github.ai/catalog/models`` (or a user-provided base URL)
+    and parses model IDs.
     """
     token = api_key or os.getenv("GITHUB_TOKEN", "")
-    url = "https://models.github.ai/catalog/models"
+    # Allow callers to override the base URL (e.g. enterprise/proxy endpoints).
+    # Accept either `base_url` or `api_base` as the kwarg for compatibility.
+    base = kwargs.get("base_url") or kwargs.get("api_base") or os.getenv("GITHUB_ENDPOINT", "https://models.github.ai/inference")
+    base = str(base).rstrip("/")
+    # Common GitHub-hosted catalog lives under /catalog/models. If the provided
+    # base looks like an inference endpoint, adapt it to the catalog path.
+    if base.endswith("/inference"):
+        url = base[:-len("/inference")] + "/catalog/models"
+    elif base.endswith("/api") or base.endswith("/v1"):
+        url = base + "/catalog/models"
+    else:
+        # Default fallback: append the well-known catalog path
+        url = base + "/catalog/models"
     headers: dict[str, str] = {"User-Agent": "fin-ai/1.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    try:
-        req = Request(url, headers=headers)
-        with urlopen(req, timeout=15) as response:
-            payload = json.load(response)
-    except URLError as exc:
-        logger.warning("Failed to list GitHub models: %s", exc.reason)
-        return []
-    except Exception as exc:
-        logger.warning("Failed to list GitHub models: %s", exc)
-        return []
+    # Try multiple candidate endpoints to be tolerant of proxied or enterprise
+    # deployments. Accept whichever returns a JSON list or a dict containing
+    # a list under common keys ('models', 'data').
+    candidate_paths = [
+        url,
+        base + "/catalog/models",
+        base + "/models",
+        base + "/v1/models",
+        base + "/api/models",
+    ]
 
-    if not isinstance(payload, list):
-        logger.warning("Unexpected GitHub models response type: %s", type(payload).__name__)
-        return []
+    payload = None
+    last_exc: Exception | None = None
+    for candidate in candidate_paths:
+        try:
+            req = Request(candidate, headers=headers)
+            with urlopen(req, timeout=15) as response:
+                payload = json.load(response)
+            if payload is not None:
+                logger.debug("GitHub model list fetched from %s", candidate)
+                break
+        except URLError as exc:
+            last_exc = exc
+            logger.debug("Failed to fetch GitHub models from %s: %s", candidate, exc)
+            continue
+        except Exception as exc:
+            last_exc = exc
+            logger.debug("Failed to fetch GitHub models from %s: %s", candidate, exc)
+            continue
 
+    if payload is None:
+        logger.warning("Could not fetch GitHub models from any candidate endpoint. Last error: %s", last_exc)
+        # As a pragmatic fallback return the environment default so the UI
+        # remains usable and the user can still proceed.
+        default = os.getenv("GITHUB_MODEL", "openai/gpt-4o")
+        return [ModelInfo(id=default, name=default, provider="github")]
+
+    # Normalize payload to a list of model dicts or ids
+    models_list = []
+    if isinstance(payload, list):
+        models_list = payload
+    elif isinstance(payload, dict):
+        # Try common container keys
+        if "models" in payload and isinstance(payload["models"], list):
+            models_list = payload["models"]
+        elif "data" in payload and isinstance(payload["data"], list):
+            models_list = payload["data"]
+        else:
+            # Unexpected dict shape — attempt to extract ids if present
+            models_list = [payload]
+
+    # Extract ids from items that may be dicts or strings
     model_ids = sorted(
         {
-            str(item.get("id", "")).strip()
-            for item in payload
-            if isinstance(item, dict) and item.get("id")
+            (item.get("id") if isinstance(item, dict) else str(item)).strip()
+            for item in models_list
+            if (isinstance(item, dict) and item.get("id")) or (isinstance(item, str) and item)
         }
     )
 
-    return [
-        ModelInfo(id=mid, name=mid, provider="github")
-        for mid in model_ids
-    ]
+    if not model_ids:
+        logger.warning("GitHub model catalog returned no model ids; using environment default.")
+        default = os.getenv("GITHUB_MODEL", "openai/gpt-4o")
+        return [ModelInfo(id=default, name=default, provider="github")]
+
+    return [ModelInfo(id=mid, name=mid, provider="github") for mid in model_ids]
 
 
 DEEPSEEK_KNOWN_MODELS = [

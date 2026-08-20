@@ -9,16 +9,16 @@
             "module": "streamlit",
             "args": [
                 "run",
-                "dashboard/financial_analyst_app.py",
+                "dashboard/financial_analyst_dashboard.py",
                 "--server.port",
                 "${input:financialDashboardPort}"
             ],
             "env": {
-                "VECTOR_DB_DIR": "${input:vectorDbPath}",
-                "AI_RESEARCH_SMTP_HOST": "${input:smtpHost}",
-                "AI_RESEARCH_SMTP_PORT": "${input:smtpPort}",
-                "AI_RESEARCH_SMTP_USER": "${input:smtpUser}",
-                "AI_RESEARCH_SMTP_PASSWORD": "${input:smtpPassword}"
+                // "VECTOR_DB_DIR": "${input:vectorDbPath}",
+                // "AI_RESEARCH_SMTP_HOST": "${input:smtpHost}",
+                // "AI_RESEARCH_SMTP_PORT": "${input:smtpPort}",
+                // "AI_RESEARCH_SMTP_USER": "${input:smtpUser}",
+                // "AI_RESEARCH_SMTP_PASSWORD": "${input:smtpPassword}"
             },
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",

@@ -38,10 +38,12 @@ _vector_db_env = os.environ.get("VECTOR_DB_DIR", "").strip()
 VECTOR_DB_DIR = _vector_db_env or str(Path(APP_DIR).expanduser() / "vector_db")
 PUBLISHED_RESEARCH_DIR = Path(APP_DIR).expanduser() / "published_research"
 QUESTION_HISTORY_DIR = Path(APP_DIR).expanduser() / "question_history"
+LOG_DIR = Path(APP_DIR).expanduser() / "logs"
 
 os.makedirs(VECTOR_DB_DIR, exist_ok=True)
 os.makedirs(QUESTION_HISTORY_DIR, exist_ok=True)
 os.makedirs(PUBLISHED_RESEARCH_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Yahoo Finance service mode
